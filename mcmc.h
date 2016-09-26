@@ -2743,13 +2743,13 @@ inline V sum(const V* values, unsigned int length) {
 
 template<typename NodeType, typename V, typename FeatureSequence>
 inline void complete_path(
-	const NodeType& node, const V* probabilities,
+	const NodeType& node, const V* probabilities, unsigned int label,
 	unsigned int sample_count, const unsigned int* path,
 	const unsigned int* excluded, unsigned int excluded_count,
 	unsigned int level, unsigned int depth, array<FeatureSequence>& x)
 {
 	unsigned int max_excluded_count = 0;
-	if (path[level] == IMPLICIT_NODE)
+	if (label == IMPLICIT_NODE)
 		max_excluded_count = node.child_count() + excluded_count;
 
 	double probability = sum(probabilities, sample_count) / sample_count;
@@ -2767,6 +2767,7 @@ inline void complete_path(
 
 	for (unsigned int i = 0; i < depth - 1; i++)
 		completed.set_feature(i, path[i]);
+	completed.set_feature(depth, label);
 
 	completed.set_probability(probability);
 
@@ -2940,11 +2941,11 @@ void process_search_state(const NodeType& n,
 	const V* probabilities, unsigned int level, unsigned int depth,
 	array<hdp_search_state<K, V>>& queue, array<FeatureSequence>& x)
 {
+	bool contains;
 	if (path[level] == IMPLICIT_NODE) {
 		/* compute the score for a descendant that is not explicitly stored in the tree */
-		complete_path(
-			n, probabilities, (unsigned int) n.posterior.length,
-			path, excluded, excluded_count, level, depth, x);
+		complete_path(n, probabilities, IMPLICIT_NODE,
+			(unsigned int) n.posterior.length, path, excluded, excluded_count, level, depth, x);
 
 		if (!queue.ensure_capacity(queue.length + n.child_count())) {
 			fprintf(stderr, "process_search_state ERROR: Unable to expand search queue.\n");
@@ -2971,14 +2972,27 @@ void process_search_state(const NodeType& n,
 					probabilities, n.child_key(i), level, depth, queue, x);
 			i++;
 		}
+	} else if (path[level] == UNION_NODE) {
+		fprintf(stderr, "process_search_state ERROR: Support for UNION_NODE is unimplemented.");
+		exit(EXIT_FAILURE);
+		/* TODO: implement this; it should look something like below */
+		/*for (unsigned int i = 0; i < excluded_count; i++) {
+			auto& child = n.get_child(excluded[i], contains);
+			if (contains) {
+				push_node_state(child, root_probabilities, path,
+						probabilities, excluded[i], level, depth, queue, x);
+			} else {
+				complete_path(n, probabilities, excluded[i],
+					(unsigned int) n.posterior.length, path, NULL, 0, level, depth, x);
+			}
+		}*/
 	} else {
-		bool contains;
 		auto& child = n.get_child(path[level], contains);
 		if (contains) {
 			push_node_state(child, root_probabilities, path,
 					probabilities, path[level], level, depth, queue, x);
 		} else {
-			complete_path(n, probabilities,
+			complete_path(n, probabilities, path[level],
 				(unsigned int) n.posterior.length, path, NULL, 0, level, depth, x);
 		}
 	}
@@ -3230,7 +3244,8 @@ V** compute_root_probabilities(
 
 template<typename NodeType, typename V, typename FeatureSet>
 inline void complete_path_distribution(
-	const NodeType& node, const V* probabilities,
+	const NodeType& node,
+	const V* probabilities, unsigned int label,
 	unsigned int row_count, const unsigned int* path,
 	const unsigned int* const* excluded,
 	const unsigned int* excluded_counts,
@@ -3248,12 +3263,14 @@ inline void complete_path_distribution(
 		return;
 	}
 	for (unsigned int i = 0; i < depth - 1; i++) {
-		features.set_feature(i, path[i]);
-		if (i != level && path[i] == IMPLICIT_NODE
-		 && !features.set_excluded(i, excluded[i], excluded_counts[i]))
-		{
-			free(features);
-			return;
+		if (i == level) {
+			features.set_feature(i, label);
+		} else {
+			features.set_feature(i, path[i]);
+			if (path[i] == IMPLICIT_NODE && !features.set_excluded(i, excluded[i], excluded_counts[i])) {
+				free(features);
+				return;
+			}
 		}
 	}
 
@@ -3277,7 +3294,7 @@ inline void complete_path_distribution(
 
 	/* compute the union of the set of child node ids and the excluded set */
 	unsigned int max_excluded_count = node.child_count() + excluded_counts[level];
-	if (path[level] != IMPLICIT_NODE || max_excluded_count == 0) return;
+	if (label != IMPLICIT_NODE || max_excluded_count == 0) return;
 	FeatureSet& completed = x.table.keys[index];
 	completed.ensure_excluded_capacity(level, max_excluded_count);
 	auto do_union = [&](unsigned int child_id) {
@@ -3396,9 +3413,10 @@ void process_search_state(
 	const V* probabilities, unsigned int level, unsigned int depth,
 	array<hdp_search_state<K, V>>& queue, hash_map<FeatureSet, V*>& x)
 {
+	bool contains;
 	if (path[level] == IMPLICIT_NODE) {
 		/* compute the score for a descendant that is not explicitly stored in the tree */
-		complete_path_distribution(n, probabilities,
+		complete_path_distribution(n, probabilities, IMPLICIT_NODE,
 			row_count, path, excluded, excluded_counts, level, depth, x);
 
 		if (!queue.ensure_capacity(queue.length + n.child_count())) {
@@ -3413,14 +3431,24 @@ void process_search_state(
 		};
 		set_subtract(subtract, n.n->children.keys,
 			(unsigned int) n.n->children.size, excluded[level], excluded_counts[level]);
+	} else if (path[level] == UNION_NODE) {
+		for (unsigned int i = 0; i < excluded_counts[level]; i++) {
+			auto& child = n.get_child(excluded[level][i], contains);
+			if (contains) {
+				push_node_state(child, root_probabilities, row_count,
+					path, probabilities, excluded[level][i], level, depth, queue, x);
+			} else {
+				complete_path_distribution(n, probabilities, excluded[level][i],
+					row_count, path, excluded, excluded_counts, level, depth, x);
+			}
+		}
 	} else {
-		bool contains;
 		auto& child = n.get_child(path[level], contains);
 		if (contains) {
 			push_node_state(child, root_probabilities, row_count,
 				path, probabilities, path[level], level, depth, queue, x);
 		} else {
-			complete_path_distribution(n, probabilities,
+			complete_path_distribution(n, probabilities, path[level],
 				row_count, path, excluded, excluded_counts, level, depth, x);
 		}
 	}
@@ -3483,21 +3511,16 @@ void predict(
  */
 
 template<typename NodeType, typename V>
-void process_search_state(
-	const NodeType& n, const unsigned int* root_table_counts,
+inline void process_search_state_node(
+	const NodeType& n, unsigned int label,
+	const unsigned int* root_table_counts,
 	const V* const* root_probabilities, const unsigned int* path,
 	const unsigned int* excluded, unsigned int excluded_count,
 	V* probabilities, unsigned int level, unsigned int depth,
 	V& output_probability)
 {
-	if (path[level] == IMPLICIT_NODE) {
-		output_probability = log(compute_maximum(n, root_table_counts,
-				root_probabilities, probabilities, excluded, excluded_count)) - log(n.posterior.length);
-		return;
-	}
-
 	bool contains;
-	auto& child = n.get_child(path[level], contains);
+	auto& child = n.get_child(label, contains);
 	if (!contains) {
 		output_probability = log(compute_maximum(n, root_table_counts,
 				root_probabilities, probabilities)) - log(n.posterior.length);
@@ -3514,6 +3537,36 @@ void process_search_state(
 			process_search_state(child, root_table_counts, root_probabilities, path,
 					excluded, excluded_count, probabilities, level + 1, depth, output_probability);
 		}
+	}
+}
+
+template<typename NodeType, typename V>
+void process_search_state(
+	const NodeType& n, const unsigned int* root_table_counts,
+	const V* const* root_probabilities, const unsigned int* path,
+	const unsigned int* excluded, unsigned int excluded_count,
+	V* probabilities, unsigned int level, unsigned int depth,
+	V& output_probability)
+{
+	if (path[level] == IMPLICIT_NODE) {
+		output_probability = log(compute_maximum(n, root_table_counts,
+				root_probabilities, probabilities, excluded, excluded_count)) - log(n.posterior.length);
+		return;
+	} else if (path[level] == UNION_NODE) {
+		fprintf(stderr, "process_search_state ERROR: Support for UNION_NODE is unimplemented.");
+		exit(EXIT_FAILURE);
+		/* TODO: implement this; it should look something like below */
+		/*process_search_state_node(n, excluded[0], root_table_counts, root_probabilities,
+				path, excluded, excluded_count, probabilities, level, depth, output_probability);
+		for (unsigned int i = 1; i < excluded_count; i++) {
+			double subtree_output;
+			process_search_state_node(n, excluded[i], root_table_counts, root_probabilities,
+					path, excluded, excluded_count, probabilities, level, depth, subtree_output);
+			output_probability = max(subtree_output, output_probability);
+		}*/
+	} else {
+		process_search_state_node(n, path[level], root_table_counts, root_probabilities,
+				path, excluded, excluded_count, probabilities, level, depth, output_probability);
 	}
 }
 

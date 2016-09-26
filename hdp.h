@@ -13,6 +13,7 @@
 #include <limits.h>
 
 #define IMPLICIT_NODE UINT_MAX
+#define UNION_NODE (UINT_MAX - 3)
 
 using namespace core;
 
