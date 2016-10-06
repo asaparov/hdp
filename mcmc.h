@@ -2058,11 +2058,13 @@ bool add(NodeType n, const BaseDistribution& pi,
 		}
 	}
 
-	unsigned int index = n.node.n->children.index_of(*path);
-	if (index < n.node.n->children.size) {
-		return add(make_child_node(n, n.node.children[index]), pi, alpha + 1, path + 1, length - 1, observation, cache);
+	unsigned int index = strict_linear_search(n.node.n->children.keys, *path, 0, (unsigned int) n.node.n->children.size);
+	if (index > 0 && n.node.n->children.keys[index - 1] == *path) {
+		/* a child node with this key already exists, so recurse into it */
+		return add(make_child_node(n, n.node.children[index - 1]), pi, alpha + 1, path + 1, length - 1, observation, cache);
 	} else {
-		unsigned int index = shift_right(*path, n.node.n->children.keys, (unsigned int) n.node.n->children.size);
+		/* there is no child node with the given key, so create it */
+		shift_right(n.node.n->children.keys, (unsigned int) n.node.n->children.size, index);
 		shift_right(n.node.n->children.values, (unsigned int) n.node.n->children.size, index);
 		node<K, V>& child = n.node.n->children.values[index];
 		if (!init(child, *alpha, 1, 8)) {
