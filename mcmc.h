@@ -3299,10 +3299,12 @@ inline void complete_path_distribution(
 	if (label != IMPLICIT_NODE || max_excluded_count == 0) return;
 	FeatureSet& completed = x.table.keys[index];
 	completed.ensure_excluded_capacity(level, max_excluded_count);
-	auto do_union = [&](unsigned int child_id) {
+	auto do_union = [&](unsigned int child_id, unsigned int i, unsigned int j) {
 		completed.exclude_unsorted(level, child_id);
 	};
-	set_union(do_union, node.n->children.keys, node.child_count(), excluded[level], excluded_counts[level]);
+	set_union(do_union, do_union, do_union,
+			node.n->children.keys, node.child_count(),
+			excluded[level], excluded_counts[level]);
 	completed.sort_excluded(level);
 }
 
