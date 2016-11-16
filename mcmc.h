@@ -2656,8 +2656,7 @@ private:
 
 	inline void free() {
 		core::free(path);
-		if (excluded_count > 0)
-			core::free(excluded);
+		core::free(excluded);
 	}
 
 	template<typename A>
@@ -2668,6 +2667,11 @@ template<typename V>
 inline bool init(hdp_path<V>& path, unsigned int length, unsigned int excluded_capacity) {
 	path.excluded_count = 0;
 	return path.initialize(length, excluded_capacity);
+}
+
+template<typename V>
+inline V log_probability(const hdp_path<V>& path) {
+	return path.probability;
 }
 
 template<typename V>
@@ -2747,12 +2751,12 @@ template<typename NodeType, typename V, typename FeatureSequence>
 inline void complete_path(
 	const NodeType& node, const V* probabilities, unsigned int label,
 	unsigned int sample_count, const unsigned int* path,
-	const unsigned int* excluded, unsigned int excluded_count,
+	const unsigned int* const* excluded, const unsigned int* excluded_counts,
 	unsigned int level, unsigned int depth, array<FeatureSequence>& x)
 {
 	unsigned int max_excluded_count = 0;
 	if (label == IMPLICIT_NODE)
-		max_excluded_count = node.child_count() + excluded_count;
+		max_excluded_count = node.child_count() + excluded_counts[level];
 
 	double probability = sum(probabilities, sample_count) / sample_count;
 	if (probability == 0.0) {
@@ -2760,43 +2764,37 @@ inline void complete_path(
 	} else if (!x.ensure_capacity(x.length + 1)) {
 		fprintf(stderr, "complete_path ERROR: Unable to expand x array.\n");
 		return;
-	} else if (!init(x[(unsigned int) x.length], depth - 1, max_excluded_count)) {
+	} else if (!init(x[(unsigned int) x.length], depth - 1)) {
 		fprintf(stderr, "complete_path ERROR: Unable to initialize feature sequence.\n");
 		return;
 	}
 	FeatureSequence& completed = x[(unsigned int) x.length];
 	x.length++;
 
-	for (unsigned int i = 0; i < depth - 1; i++)
-		completed.set_feature(i, path[i]);
-	completed.set_feature(depth, label);
+	for (unsigned int i = 0; i < depth - 1; i++) {
+		if (i == level) {
+			completed.set_feature(i, label);
+		} else {
+			completed.set_feature(i, path[i]);
+			if (path[i] == IMPLICIT_NODE && !completed.set_excluded(i, excluded[i], excluded_counts[i])) {
+				free(completed);
+				return;
+			}
+		}
+	}
 
 	completed.set_probability(probability);
 
 	/* compute the union of the set of child node ids and the excluded set */
 	if (max_excluded_count == 0) return;
-	unsigned int i = 0, j = 0;
-	while (i < node.child_count() && j < excluded_count) {
-		unsigned int child_id = node.child_key(i);
-		if (child_id == excluded[j]) {
-			completed.add_excluded_unsorted(child_id);
-			i++; j++;
-		} else if (child_id < excluded[j]) {
-			completed.add_excluded_unsorted(child_id);
-			i++;
-		} else {
-			completed.add_excluded_unsorted(excluded[j]);
-			j++;
-		}
-	}
-	while (i < node.child_count()) {
-		completed.add_excluded_unsorted(node.child_key(i));
-		i++;
-	}
-	while (j < excluded_count) {
-		completed.add_excluded_unsorted(excluded[j]);
-		j++;
-	}
+	completed.ensure_excluded_capacity(level, max_excluded_count);
+	auto do_union = [&](unsigned int child_id, unsigned int i, unsigned int j) {
+		completed.exclude_unsorted(level, child_id);
+	};
+	set_union(do_union, do_union, do_union,
+			node.n->children.keys, node.child_count(),
+			excluded[level], excluded_counts[level]);
+	completed.sort_excluded(level);
 }
 
 template<typename K, typename V, typename FeatureSequence>
@@ -2822,7 +2820,7 @@ inline void complete_path(const node_sampler<K, V>& leaf,
 	} else if (!x.ensure_capacity(x.length + 1)) {
 		fprintf(stderr, "complete_path ERROR: Unable to expand x array.\n");
 		return;
-	} else if (!init(x[(unsigned int) x.length], depth - 1, 0)) {
+	} else if (!init(x[(unsigned int) x.length], depth - 1)) {
 		fprintf(stderr, "complete_path ERROR: Unable to initialize feature sequence.\n");
 		return;
 	}
@@ -2830,10 +2828,10 @@ inline void complete_path(const node_sampler<K, V>& leaf,
 	x.length++;
 
 	for (unsigned int i = 0; i < level; i++)
-		completed.path[i] = path[i];
-	completed.path[level] = new_key;
+		completed.set_feature(i, path[i]);
+	completed.set_feature(level, new_key);
 
-	completed.probability = probability;
+	completed.set_probability(probability);
 }
 
 template<typename NodeType, typename V>
@@ -2939,7 +2937,7 @@ void push_node_state(const node_sampler<K, V>& child,
 template<typename NodeType, typename K, typename V, typename FeatureSequence>
 void process_search_state(const NodeType& n,
 	const V* const* root_probabilities, const unsigned int* path,
-	const unsigned int* excluded, unsigned int excluded_count,
+	const unsigned int* const* excluded, const unsigned int* excluded_count,
 	const V* probabilities, unsigned int level, unsigned int depth,
 	array<hdp_search_state<K, V>>& queue, array<FeatureSequence>& x)
 {
@@ -2956,11 +2954,11 @@ void process_search_state(const NodeType& n,
 
 		/* consider all child nodes not in the 'excluded' set */
 		unsigned int i = 0, j = 0;
-		while (i < n.child_count() && j < excluded_count) {
+		while (i < n.child_count() && j < excluded_count[level]) {
 			unsigned int child_id = n.child_key(i);
-			if (child_id == excluded[j]) {
+			if (child_id == excluded[level][j]) {
 				i++; j++; continue;
-			} else if (child_id < excluded[j]) {
+			} else if (child_id < excluded[level][j]) {
 				push_node_state(n.children[i], root_probabilities,
 					path, probabilities, n.child_key(i), level, depth, queue, x);
 				i++;
@@ -3006,6 +3004,52 @@ inline void cleanup_root_probabilities(V** root_probabilities, unsigned int row_
 	for (unsigned int i = 0; i < row_count; i++)
 		free(root_probabilities[i]);
 	free(root_probabilities);
+}
+
+template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
+V** copy_root_probabilities(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h, const V* const* src)
+{
+	V** root_probabilities = (V**) malloc(sizeof(V*) * h.posterior.length);
+	if (root_probabilities == NULL) {
+		fprintf(stderr, "copy_root_probabilities ERROR: Out of memory.\n");
+		return NULL;
+	}
+
+	for (unsigned int i = 0; i < h.posterior.length; i++) {
+		root_probabilities[i] = (V*) malloc(sizeof(V) * h.posterior[i].table_count);
+		if (root_probabilities[i] == NULL) {
+			fprintf(stderr, "predict ERROR: Insufficient memory for root_probabilities[%u].\n", i);
+			cleanup_root_probabilities(root_probabilities, i);
+			return NULL;
+		}
+		memcpy(root_probabilities[i], src[i], sizeof(V) * h.posterior[i].table_count);
+	}
+
+	return root_probabilities;
+}
+
+template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
+V** copy_root_probabilities(
+		const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
+		const V* const* src, unsigned int observation_count)
+{
+	V** root_probabilities = (V**) malloc(sizeof(V*) * observation_count);
+	if (root_probabilities == NULL) {
+		fprintf(stderr, "copy_root_probabilities ERROR: Out of memory.\n");
+		return NULL;
+	}
+
+	for (unsigned int i = 0; i < observation_count; i++) {
+		root_probabilities[i] = (V*) malloc(sizeof(V) * h.table_count);
+		if (root_probabilities[i] == NULL) {
+			fprintf(stderr, "predict ERROR: Insufficient memory for root_probabilities[%u].\n", i);
+			cleanup_root_probabilities(root_probabilities, i);
+			return NULL;
+		}
+		memcpy(root_probabilities[i], src[i], sizeof(V) * h.table_count);
+	}
+
+	return root_probabilities;
 }
 
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
@@ -3103,12 +3147,12 @@ V max_root_probability(
 }
 
 template<typename BaseDistribution, typename DataDistribution,
-	typename K, typename V, typename FeatureSequence>
+	typename K, typename V, typename FeatureSet>
 void predict(
 	const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
 	const K& observation, const unsigned int* path,
-	const unsigned int* excluded, unsigned int excluded_count,
-	array<FeatureSequence>& x, const V* const* root_probabilities)
+	const unsigned int* const* excluded, const unsigned int* excluded_counts,
+	array<FeatureSet>& x, const V* const* root_probabilities)
 {
 #if !defined(NDEBUG)
 	if (x.length > 0) {
@@ -3116,22 +3160,20 @@ void predict(
 		for (unsigned int i = 0; i < x.length; i++)
 			free(x[i]);
 		x.clear();
-	} else if (!std::is_sorted(excluded, excluded + excluded_count)) {
-		fprintf(stderr, "predict ERROR: Provided 'excluded' is not sorted.\n");
-		exit(EXIT_FAILURE);
 	}
 #endif
 
 	V pi = DataDistribution::probability(h.pi(), observation);
 	if (h.posterior.length == 0) {
-		if (!x.ensure_capacity(1) || !init(x[0], h.n->depth, excluded_count))
+		if (!x.ensure_capacity(1) || !init(x[0], h.n->depth - 1))
 			return;
 		x.length = 1;
-		x[0].probability = pi;
-		for (unsigned int i = 0; i + 1 < h.n->depth; i++)
-			x[0].path[i] = path[i];
-		for (unsigned int i = 0; i < excluded_count; i++)
-			x[0].excluded[i] = excluded[i];
+		x[0].set_probability(pi);
+		for (unsigned int i = 0; i + 1 < h.n->depth; i++) {
+			x[0].set_feature(i, path[i]);
+			if (path[i] == IMPLICIT_NODE)
+				x[0].set_excluded(i, excluded[i], excluded_counts[i]);
+		}
 		return;
 	}
 
@@ -3146,7 +3188,7 @@ void predict(
 	/* TODO: initial array size can be set more intelligently (depending on termination condition) */
 	array<hdp_search_state<K, V>> queue = array<hdp_search_state<K, V>>(1024);
 	process_search_state(h, root_probabilities, path,
-		excluded, excluded_count, probabilities, 0, h.n->depth, queue, x);
+		excluded, excluded_counts, probabilities, 0, h.n->depth, queue, x);
 	free(probabilities);
 
 	while (queue.length > 0) {
@@ -3155,7 +3197,7 @@ void predict(
 		queue.length--;
 
 		process_search_state(*state.n, root_probabilities, state.path,
-			excluded, excluded_count, state.probabilities, state.level, h.n->depth, queue, x);
+			excluded, excluded_counts, state.probabilities, state.level, h.n->depth, queue, x);
 		free(state);
 	}
 
