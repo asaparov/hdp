@@ -2006,6 +2006,55 @@ inline bool sample_new_assignment(
 	return true;
 }
 
+template<typename NodeType, typename Cache>
+unsigned int sample_table(const NodeType n,
+		const unsigned int* path,
+		unsigned int length, Cache& cache)
+{
+	typedef typename NodeType::value_type V;
+
+	/* first, compute the table that *would* be sampled if we were sampling from this node */
+	unsigned int table;
+	V random = (n.customer_count + n.alpha()) * sample_uniform<V>();
+	if (random < n.customer_count) {
+		table = n.root_assignment(select_categorical(n.table_sizes, random, n.table_count));
+	} else {
+		table = UINT_MAX;
+	}
+
+	if (length == 0)
+		return table;
+
+	unsigned int index = strict_linear_search(
+			n.n->children.keys, *path, 0, (unsigned int) n.n->children.size);
+	if (index > 0 && n.n->children.keys[index - 1] == *path) {
+		/* a child node with this key already exists, so recurse into it */
+		const auto& child = n.children[index - 1];
+		unsigned int child_table = sample_table(child, path + 1, length - 1, cache);
+		if (child_table == UINT_MAX) {
+			return table;
+		} else {
+			return child_table;
+		}
+	} else {
+		return table;
+	}
+}
+
+template<typename BaseDistribution, typename DataDistribution,
+	typename K, typename V, typename Cache, typename... Args>
+bool sample(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
+		K& output, const unsigned int* path, unsigned int length, Cache& cache, Args&&... args)
+{
+	unsigned int root_table = sample_table(h, path, length, cache);
+	if (root_table == UINT_MAX) {
+		/* we chose to sample a new table at the root */
+		return sample(h.pi(), output, std::forward<Args>(args)...);
+	} else {
+		return DataDistribution::sample(h.pi(), h.descendant_observations[root_table], output);
+	}
+}
+
 template<typename RootType>
 inline node_sampler<typename RootType::atom_type, typename RootType::value_type>*
 get_node_pointer(child_position<RootType>& child) {
