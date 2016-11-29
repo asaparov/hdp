@@ -2007,7 +2007,7 @@ inline bool sample_new_assignment(
 }
 
 template<typename NodeType, typename Cache>
-unsigned int sample_table(const NodeType n,
+unsigned int sample_table(const NodeType& n,
 		const unsigned int* path,
 		unsigned int length, Cache& cache)
 {
