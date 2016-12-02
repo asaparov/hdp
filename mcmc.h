@@ -2636,115 +2636,6 @@ inline bool sample_alpha_each_level(
  * Logic for computing the probability of a path given an observation.
  */
 
-template<typename V>
-struct hdp_path {
-	unsigned int* path;
-	V probability;
-
-	unsigned int* excluded;
-	unsigned int excluded_count;
-
-	hdp_path(unsigned int length, unsigned int excluded_capacity) : excluded_count(0) {
-		if (!initialize(length, excluded_capacity))
-			exit(EXIT_FAILURE);
-	}
-
-	~hdp_path() { free(); }
-
-	inline unsigned int get_feature(unsigned int index) const {
-		return path[index];
-	}
-
-	inline void set_feature(unsigned int index, unsigned int feature) {
-		path[index] = feature;
-	}
-
-	inline V get_probability() const {
-		return probability;
-	}
-
-	inline void set_probability(const V& item) {
-		probability = item;
-	}
-
-	inline void add_excluded_unsorted(unsigned int item) {
-		excluded[excluded_count] = item;
-		excluded_count++;
-	}
-
-	static inline void swap(hdp_path<V>& first, hdp_path<V>& second) {
-		core::swap(first.path, second.path);
-		core::swap(first.probability, second.probability);
-		core::swap(first.excluded, second.excluded);
-		core::swap(first.excluded_count, second.excluded_count);
-	}
-
-	static inline void move(const hdp_path<V>& first, hdp_path<V>& second) {
-		second.path = first.path;
-		second.probability = first.probability;
-		second.excluded = first.excluded;
-		second.excluded_count = first.excluded_count;
-	}
-
-	static inline void free(hdp_path<V>& path) { path.free(); }
-
-private:
-	inline bool initialize(unsigned int length, unsigned int excluded_capacity) {
-		path = (unsigned int*) malloc(sizeof(unsigned int) * length);
-		if (path == NULL) {
-			fprintf(stderr, "hdp_path.initialize ERROR: Out of memory.\n");
-			return false;
-		}
-		excluded = (unsigned int*) malloc(std::max((size_t) 1, sizeof(unsigned int) * excluded_capacity));
-		if (excluded == NULL) {
-			fprintf(stderr, "hdp_path.initialize ERROR: Out of memory.\n");
-			return false;
-		}
-		return true;
-	}
-
-	inline void free() {
-		core::free(path);
-		core::free(excluded);
-	}
-
-	template<typename A>
-	friend bool init(hdp_path<A>&, unsigned int, unsigned int);
-};
-
-template<typename V>
-inline bool init(hdp_path<V>& path, unsigned int length, unsigned int excluded_capacity) {
-	path.excluded_count = 0;
-	return path.initialize(length, excluded_capacity);
-}
-
-template<typename V>
-inline V log_probability(const hdp_path<V>& path) {
-	return path.probability;
-}
-
-template<typename V>
-struct hdp_path_sorter {
-	unsigned int depth;
-
-	hdp_path_sorter(unsigned int depth) : depth(depth) { }
-};
-
-template<typename V>
-inline bool less_than(
-	const hdp_path<V>& first,
-	const hdp_path<V>& second,
-	const hdp_path_sorter<V>& sorter)
-{
-	for (unsigned int i = 0; i < sorter.depth - 1; i++) {
-		if (first.get_feature(i) < second.get_feature(i))
-			return true;
-		else if (first.get_feature(i) > second.get_feature(i))
-			return false;
-	}
-	return false;
-}
-
 template<typename K, typename V>
 struct hdp_search_state {
 	unsigned int* path;
@@ -2796,18 +2687,18 @@ inline V sum(const V* values, unsigned int length) {
 	return sum;
 }
 
-template<typename NodeType, typename V, typename FeatureSequence>
+template<typename NodeType, typename V, typename FeatureSet>
 inline void complete_path(
 	const NodeType& node, const V* probabilities, unsigned int label,
 	unsigned int sample_count, const unsigned int* path,
 	const unsigned int* const* excluded, const unsigned int* excluded_counts,
-	unsigned int level, unsigned int depth, array<FeatureSequence>& x)
+	unsigned int level, unsigned int depth, array<FeatureSet>& x)
 {
 	unsigned int max_excluded_count = 0;
 	if (label == IMPLICIT_NODE)
 		max_excluded_count = node.child_count() + excluded_counts[level];
 
-	double probability = sum(probabilities, sample_count) / sample_count;
+	V probability = sum(probabilities, sample_count) / sample_count;
 	if (probability == 0.0) {
 		return;
 	} else if (!x.ensure_capacity(x.length + 1)) {
@@ -2817,7 +2708,7 @@ inline void complete_path(
 		fprintf(stderr, "complete_path ERROR: Unable to initialize feature sequence.\n");
 		return;
 	}
-	FeatureSequence& completed = x[(unsigned int) x.length];
+	FeatureSet& completed = x[(unsigned int) x.length];
 	x.length++;
 
 	for (unsigned int i = 0; i < depth - 1; i++) {
@@ -2846,11 +2737,11 @@ inline void complete_path(
 	completed.sort_excluded(level);
 }
 
-template<typename K, typename V, typename FeatureSequence>
+template<typename K, typename V, typename FeatureSet>
 inline void complete_path(const node_sampler<K, V>& leaf,
 	const V* const* root_probabilities, const unsigned int* path,
 	const V* probabilities, unsigned int new_key,
-	unsigned int level, unsigned int depth, array<FeatureSequence>& x)
+	unsigned int level, unsigned int depth, array<FeatureSet>& x)
 {
 #if !defined(NDEBUG)
 	if (level + 1 != depth - 1)
@@ -2873,7 +2764,7 @@ inline void complete_path(const node_sampler<K, V>& leaf,
 		fprintf(stderr, "complete_path ERROR: Unable to initialize feature sequence.\n");
 		return;
 	}
-	FeatureSequence& completed = x[(unsigned int) x.length];
+	FeatureSet& completed = x[(unsigned int) x.length];
 	x.length++;
 
 	for (unsigned int i = 0; i < level; i++)
@@ -2931,12 +2822,12 @@ inline V compute_maximum(const NodeType& n,
 	return maximum;
 }
 
-template<typename K, typename V, typename FeatureSequence>
+template<typename K, typename V, typename FeatureSet>
 void push_node_state(const node_sampler<K, V>& child,
 	const V* const* root_probabilities,
 	const unsigned int* path, const V* probabilities,
 	unsigned int new_key, unsigned int level, unsigned int depth,
-	array<hdp_search_state<K, V>>& queue, array<FeatureSequence>& x)
+	array<hdp_search_state<K, V>>& queue, array<FeatureSet>& x)
 {
 	if (level + 1 == depth - 1) {
 		/* this is the last level */
@@ -2983,12 +2874,12 @@ void push_node_state(const node_sampler<K, V>& child,
 	std::push_heap(queue.data, queue.data + queue.length);
 }
 
-template<typename NodeType, typename K, typename V, typename FeatureSequence>
+template<typename NodeType, typename K, typename V, typename FeatureSet>
 void process_search_state(const NodeType& n,
 	const V* const* root_probabilities, const unsigned int* path,
 	const unsigned int* const* excluded, const unsigned int* excluded_count,
 	const V* probabilities, unsigned int level, unsigned int depth,
-	array<hdp_search_state<K, V>>& queue, array<FeatureSequence>& x)
+	array<hdp_search_state<K, V>>& queue, array<FeatureSet>& x)
 {
 	bool contains;
 	if (path[level] == IMPLICIT_NODE) {
@@ -3255,20 +3146,27 @@ void predict(
 }
 
 template<typename BaseDistribution, typename DataDistribution,
-	typename K, typename V, typename FeatureSequence>
+	typename K, typename V, typename FeatureSet>
 inline void predict(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
-	const K& observation, array<FeatureSequence>& x, const V* const* root_probabilities)
+	const K& observation, array<FeatureSet>& x, const V* const* root_probabilities)
 {
-	unsigned int* path = (unsigned int*) malloc(sizeof(unsigned int) * (h.n->depth - 1));
-	if (path == NULL) {
+	unsigned int* path = NULL;
+	unsigned int** excluded = NULL;
+	unsigned int* excluded_counts = NULL;
+	path = (unsigned int*) malloc(sizeof(unsigned int) * (h.n->depth - 1));
+	excluded = (unsigned int**) calloc(h.n->depth - 1, sizeof(unsigned int*));
+	excluded_counts = (unsigned int*) calloc(h.n->depth - 1, sizeof(unsigned int));
+	if (path == NULL || excluded_counts == NULL) {
+		if (path != NULL) free(path);
+		if (excluded != NULL) free(excluded);
 		fprintf(stderr, "predict ERROR: Out of memory.\n");
 		return;
 	}
 
 	for (unsigned int i = 0; i + 1 < h.n->depth; i++)
 		path[i] = IMPLICIT_NODE;
-	predict(h, observation, path, NULL, 0, x, root_probabilities);
-	free(path);
+	predict(h, observation, path, excluded, excluded_counts, x, root_probabilities);
+	free(path); free(excluded); free(excluded_counts);
 }
 
 
@@ -3447,12 +3345,12 @@ inline void complete_path_distribution(const node_sampler<K, V>& leaf,
 	x.table.size++;
 }
 
-template<typename K, typename V, typename FeatureSequence>
+template<typename K, typename V, typename FeatureSet>
 void push_node_state(const node_sampler<K, V>& child,
 	const V* const* root_probabilities, unsigned int row_count,
 	const unsigned int* path, const V* probabilities,
 	unsigned int new_key, unsigned int level, unsigned int depth,
-	array<hdp_search_state<K, V>>& queue, hash_map<FeatureSequence, V*>& x)
+	array<hdp_search_state<K, V>>& queue, hash_map<FeatureSet, V*>& x)
 {
 	if (level + 1 == depth - 1) {
 		/* this is the last level */
@@ -3550,11 +3448,11 @@ void process_search_state(
 }
 
 template<typename BaseDistribution, typename DataDistribution,
-	typename K, typename V, typename FeatureSequence>
+	typename K, typename V, typename FeatureSet>
 void predict(
 	const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
 	const unsigned int* path, const unsigned int* const* excluded,
-	const unsigned int* excluded_counts, hash_map<FeatureSequence, V*>& x,
+	const unsigned int* excluded_counts, hash_map<FeatureSet, V*>& x,
 	const K* observations, unsigned int observation_count, const V* const* root_probabilities)
 {
 #if !defined(NDEBUG)
@@ -3699,31 +3597,13 @@ void predict(
 	free(probabilities);
 }
 
-template<typename V>
-void log_normalize(array<hdp_path<V>>& x) {
-	V sum = 0.0;
-	for (unsigned int i = 0; i < x.length; i++) {
-		hdp_path<V>& path = x[i];
-		sum += path.probability * path.count;
-	}
-
-	V log_sum = log(sum);
-	for (unsigned int i = 0; i < x.length; i++)
-		x[i].probability = log(x[i].probability) - log_sum;
-}
-
-template<typename V>
-void log(array<hdp_path<V>>& x) {
-	for (unsigned int i = 0; i < x.length; i++)
-		x[i].probability = log(x[i].probability);
-}
-
 
 /**
  * The following are unit tests for the HDP MCMC code.
  */
 
 #include <core/timer.h>
+#include <math/features.h>
 
 template<typename BaseDistribution, typename DataDistribution,
 	typename BaseParameters, typename K, typename V>
@@ -3760,7 +3640,7 @@ bool discrete_hdp_test(const BaseParameters& base_params,
 	printf("discrete_hdp_test: Completed %u iterations in %lf s.\n", iterations, stopwatch.nanoseconds() / 1.0e9);
 	printf("discrete_hdp_test: Gathered %zu samples.\n", sampler.posterior.length);
 
-	array<hdp_path<V>> paths = array<hdp_path<V>>(32);
+	array<weighted_feature_set<V>> paths = array<weighted_feature_set<V>>(32);
 	V** root_probabilities = compute_root_probabilities(sampler, (unsigned int) 1);
 	predict(sampler, (unsigned int) 1, paths, root_probabilities);
 	cleanup_root_probabilities(root_probabilities, (unsigned int) sampler.posterior.length);
@@ -3768,10 +3648,22 @@ bool discrete_hdp_test(const BaseParameters& base_params,
 	printf("discrete_hdp_test: The following paths were predicted\n");
 	FILE* out = stdout;
 	if (paths.length > 1)
-		quick_sort(paths, hdp_path_sorter<V>(depth));
-	for (unsigned int i = 0; i < paths.length; i++) {
-		print(paths[i].path, h.depth - 1, out);
-		printf(" with probability %lf.\n", paths[i].probability);
+		quick_sort(paths, feature_set_sorter(depth));
+	unsigned int* path = (unsigned int*) alloca(sizeof(unsigned int) * (h.depth - 1));
+	if (path == NULL) return false;
+	for (unsigned int i = 0; i < paths.length; i++)
+	{
+		memcpy(path, paths[i].features.features, sizeof(unsigned int) * (h.depth - 1));
+		print(path, h.depth - 1, out);
+		printf(" with probability %lf.", exp(paths[i].log_probability));
+
+		K samples[20];
+		for (unsigned int j = 0; j < h.depth - 1; j++)
+			if (path[j] == IMPLICIT_NODE)
+				path[j] = IMPLICIT_NODE - 1;
+		for (unsigned int j = 0; j < array_length(samples); j++)
+			sample(sampler, samples[j], path, h.depth - 1, cache);
+		printf(" Samples: "); print(samples, out); fputc('\n', out);
 
 		free(paths[i]);
 	}

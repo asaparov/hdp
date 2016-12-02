@@ -472,12 +472,12 @@ bool add(NodeType& n, const typename NodeType::value_type* alpha,
 		return false;
 	}
 
-	bool contains;
-	node<K, V>& child = n.children.get(*path, contains);
-	if (contains) {
-		return add(child, alpha + 1, path + 1, length - 1, observation);
+	unsigned int index = strict_linear_search(n.children.keys, *path, 0, n.children.size);
+	if (index > 0 && n.children.keys[index - 1] == *path) {
+		return add(n.children.values[index - 1], alpha + 1, path + 1, length - 1, observation);
 	} else {
-		unsigned int index = shift_right(*path, n.children.keys, (unsigned int) n.children.size);
+		shift_right(n.children.keys, (unsigned int) n.children.size, index);
+		shift_right(n.children.values, (unsigned int) n.children.size, index);
 		node<K, V>& child = n.children.values[index];
 		if (!init(child, *alpha, 1, 8)) {
 			fprintf(stderr, "add ERROR: Error creating new child.\n");
