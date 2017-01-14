@@ -37,10 +37,6 @@ bool select_table(NodeType& n,
         Cache& cache);
 
 
-inline double log_rising_factorial(double base, unsigned int exponent) {
-	return lgamma(base + exponent) - lgamma(base);
-}
-
 static inline bool compare_histograms(
 		const unsigned int* first, const unsigned int* second,
 		unsigned int first_length, unsigned int second_length)
@@ -2631,6 +2627,17 @@ inline bool sample_alpha_each_level(
 	return true;
 }
 
+template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
+inline V log_probability_each_level(
+	const hdp_sampler<BaseDistribution, DataDistribution, K, V>& n,
+	const V* a, const V* b)
+{
+	V score = 0.0;
+	for (unsigned int i = 0; i < n.n->depth; i++)
+		score += log_probability_gamma(n.n->alpha[i], a[i], b[i]);
+	return score;
+}
+
 
 /**
  * Logic for computing the probability of a path given an observation.
@@ -3177,29 +3184,6 @@ inline void predict(const hdp_sampler<BaseDistribution, DataDistribution, K, V>&
  * 'posterior' array, as the above code does).
  */
 
-template<typename T>
-struct histogram_keys
-{
-	struct histogram_key_view {
-		const T* keys;
-		unsigned int length;
-	};
-
-	const array_histogram<T>* histograms;
-
-	histogram_keys(const array_histogram<T>* histograms) :
-		histograms(histograms) { }
-
-	inline histogram_key_view operator [] (unsigned int index) {
-		return { histograms[index].counts.keys };
-	}
-};
-
-template<typename T>
-unsigned int size(const typename histogram_keys<T>::histogram_key_view& view) {
-	return view.length;
-}
-
 /**
  * Constructs a map from observations to a vector, of which
  * each element is the probability of assigning that
@@ -3595,6 +3579,39 @@ void predict(
 			excluded, excluded_count, probabilities, 0, h.depth, output_probability);
 
 	free(probabilities);
+}
+
+
+/**
+ * Functionality for computing the joint probability of a
+ * seating arrangement in a Chinese restaurant process/franchise.
+ */
+
+
+template<typename NodeType>
+inline typename NodeType::value_type crp_log_probability(const NodeType& node) {
+	typedef typename NodeType::value_type V;
+	V score = node.table_count * node.log_alpha() - log_rising_factorial(node.alpha(), node.customer_count);
+	for (unsigned int i = 0; i < node.table_count; i++)
+		score += lgamma(node.table_sizes[i]);
+	return score;
+}
+
+template<typename NodeType>
+typename NodeType::value_type crf_log_probability(const NodeType& node) {
+	typedef typename NodeType::value_type V;
+	V score = crp_log_probability(node);
+	for (unsigned int i = 0; i < node.child_count(); i++)
+		score += crf_log_probability(node.children[i]);
+	return score;
+}
+
+template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
+V log_probability(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h) {
+	V score = crf_log_probability(h);
+	for (unsigned int i = 0; i < h.table_count; i++)
+		score += DataDistribution::log_probability(h.pi(), h.descendant_observations[i]);
+	return score;
 }
 
 
