@@ -3268,6 +3268,7 @@ inline void complete_path_distribution(
 	x.table.size++;
 
 	/* compute the union of the set of child node ids and the excluded set */
+	if (depth == 1) return;
 	unsigned int max_excluded_count = node.child_count() + excluded_counts[level];
 	if (label != IMPLICIT_NODE || max_excluded_count == 0) return;
 	FeatureSet& completed = x.table.keys[index];
@@ -3460,6 +3461,13 @@ void predict(
 		probabilities[i] = compute_root_probability(h, root_probabilities[i], pi, h.alpha());
 	}
 	probabilities[observation_count] = h.alpha() / (h.alpha() + h.customer_count);
+
+	/* handle the special case where the HDP has depth 1 (a vanilla DP) */
+	if (h.n->depth == 1) {
+		complete_path_distribution(h, probabilities, 0, observation_count,
+				path, excluded, excluded_counts, 0, h.n->depth, x);
+		free(probabilities); return;
+	}
 
 	/* TODO: initial array size can be set more intelligently (depending on termination condition) */
 	array<hdp_search_state<K, V>> queue = array<hdp_search_state<K, V>>(1024);
