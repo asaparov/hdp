@@ -1254,8 +1254,7 @@ bool copy(
 template<typename NodeType, typename Stream, typename KeyPrinter,
 	typename AtomPrinter, typename K = typename NodeType::atom_type>
 bool print(const NodeType& node, Stream& out,
-	KeyPrinter& key_printer, AtomPrinter& atom_printer,
-	unsigned int level = 0)
+	KeyPrinter& key_printer, AtomPrinter& atom_printer, unsigned int level = 0)
 {
 	bool success = true;
 	if (node.observation_count() > 0) {
