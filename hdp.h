@@ -263,7 +263,7 @@ struct hdp {
 	array<K> observations;
 
 	template<typename BaseParameters>
-	hdp(BaseParameters& base_params, const V* alpha, unsigned int depth) :
+	hdp(const BaseParameters& base_params, const V* alpha, unsigned int depth) :
 		pi(base_params), depth(depth), log_alpha(::log(alpha[0])), children(4), observations(4)
 	{
 		if (!initialize(alpha)) {
