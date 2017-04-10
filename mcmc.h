@@ -2722,7 +2722,8 @@ inline void complete_path(
 			completed.set_feature(i, label);
 		} else {
 			completed.set_feature(i, path[i]);
-			if (path[i] == IMPLICIT_NODE && !completed.set_excluded(i, excluded[i], excluded_counts[i])) {
+			if (path[i] == IMPLICIT_NODE && excluded != NULL
+			 && !completed.set_excluded(i, excluded[i], excluded_counts[i])) {
 				free(completed);
 				return;
 			}
