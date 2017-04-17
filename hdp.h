@@ -497,4 +497,23 @@ inline bool add(hdp<BaseDistribution, DataDistribution, K, V>& h,
 	return add(h, h.alpha + 1, path, length - 1, observation);
 }
 
+template<typename NodeType>
+bool contains(NodeType& n,
+	const unsigned int* path, unsigned int length,
+	const typename NodeType::atom_type& observation)
+{
+	if (length == 0) return n.observations.contains(observation);
+
+	if (*path == IMPLICIT_NODE) {
+		for (unsigned int i = 0; i < n.children.size; i++)
+			if (contains(n.children.values[i], path + 1, length - 1, observation)) return true;
+		return false;
+	} else {
+		unsigned int index = strict_linear_search(n.children.keys, *path, 0, n.children.size);
+		if (index > 0 && n.children.keys[index - 1] == *path)
+			return contains(n.children.values[index - 1], path + 1, length - 1, observation);
+		else return false;
+	}
+}
+
 #endif /* HDP_H_ */
