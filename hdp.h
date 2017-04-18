@@ -69,6 +69,13 @@ struct node {
 		return sum;
 	}
 
+	static inline void swap(node<K, V>& first, node<K, V>& second) {
+		core::swap(first.children, second.children);
+		core::swap(first.alpha, second.alpha);
+		core::swap(first.log_alpha, second.log_alpha);
+		core::swap(first.observations, second.observations);
+	}
+
 	static inline void free(node<K, V>& n) {
 		n.free();
 		core::free(n.observations);
@@ -161,6 +168,8 @@ bool read_node(NodeType& node, FILE* in, AtomReader& atom_reader, KeyReader& key
 		free(node.observations);
 		return false;
 	}
+	if (node.children.size > 1)
+		sort(node.children.keys, node.children.values, node.children.size, dummy_sorter());
 	return true;
 }
 

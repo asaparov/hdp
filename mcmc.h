@@ -543,12 +543,20 @@ private:
 		return true;
 	}
 
-	inline void free(unsigned int child_count) {
-		if (children != NULL) {
+	inline void free_children(unsigned int child_count, const unsigned int* indices = NULL) {
+		if (indices == NULL) {
 			for (unsigned int i = 0; i < child_count; i++)
 				core::free(children[i]);
-			core::free(children);
+		} else {
+			for (unsigned int i = 0; i < child_count; i++)
+				core::free(children[indices[i]]);
 		}
+		core::free(children);
+	}
+
+	inline void free(unsigned int child_count, const unsigned int* indices = NULL) {
+		if (children != NULL)
+			free_children(child_count, indices);
 		for (unsigned int i = 0; i < posterior.length; i++)
 			core::free(posterior[i]);
 		for (unsigned int i = 0; i < table_count; i++)
@@ -602,11 +610,11 @@ private:
 	friend bool init(node_sampler<C, D>&, const hdp_sampler<A, B, C, D>&,
 		node<C, D>&, node_sampler<C, D>*, unsigned int);
 
-	template<typename A, typename B>
-	friend bool read_node(A& n, B& stream, typename A::node_type&);
+	template<typename A, typename B, typename C>
+	friend bool read_sampler_node(A&, B&, typename A::node_type&, C&);
 
-	template<typename A, typename B, typename C, typename D>
-	friend bool read(node_sampler<A, B>& n, C& stream, node<A, B>& hdp_node, D& parent);
+	template<typename A, typename B, typename C, typename D, typename E>
+	friend bool read(node_sampler<A, B>&, C&, node<A, B>&, D&, E&);
 };
 
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
@@ -1141,12 +1149,20 @@ private:
 		return true;
 	}
 
-	inline void free(unsigned int child_count) {
-		if (children != NULL) {
+	inline void free_children(unsigned int child_count, const unsigned int* indices = NULL) {
+		if (indices == NULL) {
 			for (unsigned int i = 0; i < child_count; i++)
 				core::free(children[i]);
-			core::free(children);
+		} else {
+			for (unsigned int i = 0; i < child_count; i++)
+				core::free(children[indices[i]]);
 		}
+		core::free(children);
+	}
+
+	inline void free(unsigned int child_count, const unsigned int* indices = NULL) {
+		if (children != NULL)
+			free_children(child_count, indices);
 		if (descendant_observations != NULL) {
 			for (unsigned int i = 0; i < table_count; i++)
 				core::free(descendant_observations[i]);
@@ -1182,8 +1198,8 @@ private:
 	template<typename A, typename B, typename C, typename D>
 	friend bool init(hdp_sampler<A, B, C, D>&, hdp<A, B, C, D>&, int);
 
-	template<typename A, typename B>
-	friend bool read_node(A& n, B& stream, typename A::node_type&);
+	template<typename A, typename B, typename C>
+	friend bool read_sampler_node(A&, B&, typename A::node_type&, C&);
 };
 
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
@@ -1297,13 +1313,13 @@ constexpr node_sampler<K, V>* get_parent(hdp_sampler<BaseDistribution, DataDistr
 	return NULL;
 }
 
-template<typename K, typename V, typename Stream, typename ParentType>
-bool read(node_sampler<K, V>& n, Stream& stream, node<K, V>& hdp_node, ParentType& parent)
+template<typename K, typename V, typename Stream, typename ParentType, typename KeyReader>
+bool read(node_sampler<K, V>& n, Stream& stream, node<K, V>& hdp_node, ParentType& parent, KeyReader& key_reader)
 {
 	n.parent = get_parent(parent);
 	n.table_assignments = NULL;
 	n.root_assignments = NULL;
-	if (!read_node(n, stream, hdp_node))
+	if (!read_sampler_node(n, stream, hdp_node, key_reader))
 		return false;
 
 	if (!read(n.table_assignments, stream, n.table_count)) {
@@ -1313,41 +1329,47 @@ bool read(node_sampler<K, V>& n, Stream& stream, node<K, V>& hdp_node, ParentTyp
 	return true;
 }
 
-template<typename BaseDistribution, typename DataDistribution, typename K, typename V, typename Stream>
+template<typename BaseDistribution, typename DataDistribution,
+	typename K, typename V, typename Stream, typename KeyReader>
 bool read(hdp_sampler<BaseDistribution, DataDistribution, K, V>& n,
-	Stream& stream, hdp<BaseDistribution, DataDistribution, K, V>& h)
+	Stream& stream, hdp<BaseDistribution, DataDistribution, K, V>& h,
+	KeyReader& key_reader)
 {
-	if (!read_node(n, stream, h)) return false;
+	if (!read_sampler_node(n, stream, h, key_reader)) return false;
 	recompute_root_assignments(n);
 	return true;
 }
 
-template<typename NodeType, typename Stream>
-bool write_node(const NodeType& n, Stream& stream)
+template<typename NodeType, typename Stream, typename KeyWriter>
+bool write_sampler_node(const NodeType& n, Stream& stream, KeyWriter& key_writer)
 {
 	if (!write(n.table_count, stream)
+	 || !write(n.n->children.keys, stream, n.child_count(), key_writer)
 	 || !write(n.observation_assignments, stream, n.observation_count()))
 		 return false;
 	for (unsigned int i = 0; i < n.child_count(); i++)
-		if (!write(n.children[i], stream)) return false;
+		if (!write(n.children[i], stream, key_writer)) return false;
 	return true;
 }
 
-template<typename K, typename V, typename Stream>
-bool write(const node_sampler<K, V>& n, Stream& stream)
+template<typename K, typename V, typename Stream, typename KeyWriter>
+bool write(const node_sampler<K, V>& n, Stream& stream, KeyWriter& key_writer)
 {
-	return write_node(n, stream)
+	return write_sampler_node(n, stream, key_writer)
 		&& write(n.table_assignments, stream, n.table_count);
 }
 
-template<typename BaseDistribution, typename DataDistribution, typename K, typename V, typename Stream>
-bool write(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& n, Stream& stream)
+template<typename BaseDistribution, typename DataDistribution,
+	typename K, typename V, typename Stream, typename KeyWriter>
+bool write(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& n, Stream& stream, KeyWriter& key_writer)
 {
-	return write_node(n, stream);
+	return write_sampler_node(n, stream, key_writer);
 }
 
-template<typename NodeType, typename Stream>
-bool read_node(NodeType& n, Stream& stream, typename NodeType::node_type& hdp_node)
+template<typename NodeType, typename Stream, typename KeyReader>
+bool read_sampler_node(NodeType& n, Stream& stream,
+		typename NodeType::node_type& hdp_node,
+		KeyReader& key_reader)
 {
 	unsigned int table_count;
 	if (!array_init(n.posterior, 32)) {
@@ -1364,34 +1386,51 @@ bool read_node(NodeType& n, Stream& stream, typename NodeType::node_type& hdp_no
 	n.descendant_observations = NULL; n.table_sizes = NULL;
 	n.children = (typename NodeType::child_type*) malloc(sizeof(typename NodeType::child_type) * hdp_node.children.capacity);
 	n.observation_assignments = (unsigned int*) calloc(sizeof(unsigned int), hdp_node.observations.capacity);
-	if (n.children == NULL || n.observation_assignments == NULL || !n.resize(n.table_capacity)
+	unsigned int* keys = (unsigned int*) malloc(sizeof(unsigned int) * hdp_node.children.size);
+	unsigned int* indices = (unsigned int*) malloc(sizeof(unsigned int) * hdp_node.children.size);
+	unsigned int* inverse_indices = (unsigned int*) malloc(sizeof(unsigned int) * hdp_node.children.size);
+	if (n.children == NULL || n.observation_assignments == NULL || keys == NULL || indices == NULL || inverse_indices == NULL
+	 || !n.resize(n.table_capacity) || !read(keys, stream, hdp_node.children.size, key_reader)
 	 || !read(n.observation_assignments, stream, (unsigned int) hdp_node.observations.length))
 	{
-		fprintf(stderr, "read_node ERROR: Unable to initialize tables.\n");
+		fprintf(stderr, "read_sampler_node ERROR: Unable to initialize tables.\n");
 		n.free(0); free(n.posterior); return false;
 	}
 	memset(n.table_sizes, 0, sizeof(unsigned int) * table_count);
 
 	for (unsigned int i = 0; i < table_count; i++) {
 		if (!init(n.descendant_observations[i], 8)) {
-			fprintf(stderr, "read_node ERROR: Unable to initialize descendant observation histograms.\n");
-			n.free(0); free(n.posterior); return false;
+			fprintf(stderr, "read_sampler_node ERROR: Unable to initialize descendant observation histograms.\n");
+			n.free(0); free(n.posterior); free(indices); free(inverse_indices); return false;
 		}
 		n.table_count++;
 	}
 
 	for (unsigned int i = 0; i < hdp_node.children.size; i++) {
-		if (!read(n.children[i], stream, hdp_node.children.values[i], n)) {
-			fprintf(stderr, "read_node ERROR: Unable to read child node.\n");
-			n.free(i); free(n.posterior); return false;
+		indices[i] = i;
+		inverse_indices[i] = i;
+	}
+	if (hdp_node.children.size > 1) {
+		sort(keys, indices, hdp_node.children.size, dummy_sorter());
+		sort(indices, inverse_indices, hdp_node.children.size);
+	}
+	for (unsigned int i = 0; i < hdp_node.children.size; i++)
+		free(keys[i]);
+	free(indices); free(keys);
+
+	for (unsigned int i = 0; i < hdp_node.children.size; i++) {
+		if (!read(n.children[inverse_indices[i]], stream, hdp_node.children.values[inverse_indices[i]], n, key_reader)) {
+			fprintf(stderr, "read_sampler_node ERROR: Unable to read child node.\n");
+			n.free(i, indices); free(n.posterior); free(inverse_indices); return false;
 		}
 	}
+	free(inverse_indices);
 
 	/* compute descendant observations, table sizes, and customer count */
 	for (unsigned int i = 0; i < n.observation_count(); i++) {
 		unsigned int table = n.observation_assignments[i];
 		if (!n.descendant_observations[table].add(n.get_observation(i))) {
-			fprintf(stderr, "read_node ERROR: Unable to add observation.\n");
+			fprintf(stderr, "read_sampler_node ERROR: Unable to add observation.\n");
 			n.free(); free(n.posterior); return false;
 		}
 		n.table_sizes[table]++;
@@ -1401,7 +1440,7 @@ bool read_node(NodeType& n, Stream& stream, typename NodeType::node_type& hdp_no
 		for (unsigned int j = 0; j < n.children[i].table_count; j++) {
 			unsigned int table = n.children[i].table_assignments[j];
 			if (!n.descendant_observations[table].add(n.children[i].descendant_observations[j])) {
-				fprintf(stderr, "read_node ERROR: Unable to add child node's observations.\n");
+				fprintf(stderr, "read_sampler_node ERROR: Unable to add child node's observations.\n");
 				n.free(); free(n.posterior); return false;
 			}
 			n.table_sizes[table]++;
