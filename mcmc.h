@@ -2724,6 +2724,32 @@ inline V compute_root_probability(const RootSample& sample,
 	return probability / (sample.customer_count + alpha);
 }
 
+template<typename V, typename NodeSample>
+inline V compute_probability(const NodeSample& sample,
+		const array<unsigned int>& root_tables,
+		const V& prior, const V& alpha)
+{
+	V probability = 0.0;
+	for (unsigned int i = 0; i < sample.table_count; i++) {
+		if (root_tables.contains(sample.root_assignments[i]))
+			probability += sample.table_sizes[i];
+	}
+	probability += alpha * prior;
+	return probability / (sample.customer_count + alpha);
+}
+
+template<typename V, typename RootSample>
+inline V compute_root_probability(const RootSample& sample,
+		const array<unsigned int>& root_tables,
+		const V& prior, const V& alpha)
+{
+	V probability = 0.0;
+	for (unsigned int table : root_tables)
+		probability += sample.table_sizes[table];
+	probability += alpha * prior;
+	return probability / (sample.customer_count + alpha);
+}
+
 template<typename V>
 inline V sum(const V* values, unsigned int length) {
 	V sum = 0.0;
@@ -2783,9 +2809,9 @@ inline void complete_path(
 	completed.sort_excluded(level);
 }
 
-template<typename K, typename V, typename FeatureSet>
+template<typename K, typename V, typename RootDistributionType, typename FeatureSet>
 inline void complete_path(const node_sampler<K, V>& leaf,
-	const V* const* root_probabilities, const unsigned int* path,
+	const RootDistributionType& root_probabilities, const unsigned int* path,
 	const V* probabilities, unsigned int new_key,
 	unsigned int level, unsigned int depth, array<FeatureSet>& x)
 {
@@ -2839,7 +2865,28 @@ inline V compute_maximum(const NodeType& n,
 
 template<typename NodeType, typename V>
 inline V compute_maximum(const NodeType& n,
-		const V* const* root_probabilities, const V* probabilities,
+	const array<unsigned int>* root_tables,
+	const V* probabilities)
+{
+	V maximum = 0.0;
+	for (unsigned int i = 0; i < n.posterior.length; i++) {
+		V maximum_i = probabilities[i];
+		const array<unsigned int>& root = root_tables[i];
+		auto& sample = n.posterior[i];
+		for (unsigned int j = 0; j < sample.table_count; j++) {
+			if (sample.table_sizes[j] > 0 && root.contains(sample.root_assignment(j))) {
+				maximum_i = 1.0;
+				break;
+			}
+		}
+		maximum += maximum_i;
+	}
+	return maximum;
+}
+
+template<typename NodeType, typename RootDistributionType, typename V>
+inline V compute_maximum(const NodeType& n,
+		const RootDistributionType& root_probabilities, const V* probabilities,
 		const unsigned int* excluded, unsigned int excluded_count)
 {
 	if (excluded_count == 0)
@@ -2868,9 +2915,9 @@ inline V compute_maximum(const NodeType& n,
 	return maximum;
 }
 
-template<typename K, typename V, typename FeatureSet>
+template<typename K, typename V, typename RootDistributionType, typename FeatureSet>
 void push_node_state(const node_sampler<K, V>& child,
-	const V* const* root_probabilities,
+	const RootDistributionType& root_probabilities,
 	const unsigned int* path, const V* probabilities,
 	unsigned int new_key, unsigned int level, unsigned int depth,
 	array<hdp_search_state<K, V>>& queue, array<FeatureSet>& x)
@@ -2920,9 +2967,9 @@ void push_node_state(const node_sampler<K, V>& child,
 	std::push_heap(queue.data, queue.data + queue.length);
 }
 
-template<typename NodeType, typename K, typename V, typename FeatureSet>
+template<typename NodeType, typename RootDistributionType, typename K, typename V, typename FeatureSet>
 void process_search_state(const NodeType& n,
-	const V* const* root_probabilities, const unsigned int* path,
+	const RootDistributionType& root_probabilities, const unsigned int* path,
 	const unsigned int* const* excluded, const unsigned int* excluded_count,
 	const V* probabilities, unsigned int level, unsigned int depth,
 	array<hdp_search_state<K, V>>& queue, array<FeatureSet>& x)
@@ -2992,6 +3039,13 @@ inline void cleanup_root_probabilities(V** root_probabilities, unsigned int row_
 	free(root_probabilities);
 }
 
+inline void cleanup_root_probabilities(array<unsigned int>* root_probabilities, unsigned int row_count)
+{
+	for (unsigned int i = 0; i < row_count; i++)
+		free(root_probabilities[i]);
+	free(root_probabilities);
+}
+
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
 V** copy_root_probabilities(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h, const V* const* src)
 {
@@ -3039,6 +3093,28 @@ V** copy_root_probabilities(
 }
 
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
+array<unsigned int>* copy_root_probabilities(
+		const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
+		const array<unsigned int>* src, unsigned int observation_count)
+{
+	array<unsigned int>* root_probabilities = (array<unsigned int>*)
+			malloc(sizeof(array<unsigned int>) * observation_count);
+	if (root_probabilities == NULL) {
+		fprintf(stderr, "copy_root_probabilities ERROR: Out of memory.\n");
+		return NULL;
+	} for (unsigned int i = 0; i < observation_count; i++) {
+		if (!array_init(root_probabilities[i], max((unsigned int) src[i].length, 1u))) {
+			fprintf(stderr, "copy_root_probabilities ERROR: Out of memory.\n");
+			cleanup_root_probabilities(root_probabilities, i); return NULL;
+		}
+		memcpy(root_probabilities[i].data, src[i].data, sizeof(unsigned int) * src[i].length);
+		root_probabilities[i].length = src[i].length;
+	}
+
+	return root_probabilities;
+}
+
+template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
 unsigned int* compute_root_counts(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h)
 {
 	/* initialize and store the list of root table counts */
@@ -3051,53 +3127,6 @@ unsigned int* compute_root_counts(const hdp_sampler<BaseDistribution, DataDistri
 		root_table_counts[i] = h.posterior[i].table_count;
 
 	return root_table_counts;
-}
-
-/**
- * Computes a matrix, where every row corresponds to a
- * sample from the posterior, and every column is a table
- * at the root node. Each element contains the probability
- * of assigning the given observation to each table at the
- * root (without taking into account table sizes and the
- * alpha parameter).
- */
-template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
-V** compute_root_probabilities(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h, const K& observation)
-{
-	/* TODO: there's a potential speedup with a single contiguous array */
-	/* initialize the root_probabilities array of arrays */
-	V** root_probabilities = (V**) malloc(sizeof(V*) * h.posterior.length);
-	if (root_probabilities == NULL) {
-		fprintf(stderr, "predict ERROR: Insufficient memory for root_probabilities.\n");
-		return NULL;
-	}
-
-	unsigned int sample_count = 0;
-	for (unsigned int i = 0; i < h.posterior.length; i++) {
-		root_probabilities[i] = (V*) malloc(sizeof(V) * h.posterior[i].table_count);
-		if (root_probabilities[i] == NULL) {
-			fprintf(stderr, "predict ERROR: Insufficient memory for root_probabilities[%u].\n", i);
-			cleanup_root_probabilities(root_probabilities, sample_count);
-			return NULL;
-		}
-		sample_count++;
-	}
-
-	/* store the appropriate conditional probabilities in root_probabilities */
-	for (unsigned int i = 0; i < h.posterior.length; i++) {
-		for (unsigned int j = 0; j < h.posterior[i].table_count; j++)
-			/* TODO: test numerical stability */
-			if (h.posterior[i].descendant_observations[j].counts.size == 0) {
-				/* theoretically, this should be the prior probability of 'observation',
-				   but since the table is empty, its likelihood will be zero anyway */
-				root_probabilities[i][j] = 0.0;
-			} else {
-				root_probabilities[i][j] = DataDistribution::conditional(
-						h.pi(), observation, h.posterior[i].descendant_observations[j]);
-			}
-	}
-
-	return root_probabilities;
 }
 
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V,
@@ -3133,12 +3162,12 @@ V max_root_probability(
 }
 
 template<typename BaseDistribution, typename DataDistribution,
-	typename K, typename V, typename FeatureSet>
+	typename K, typename V, typename FeatureSet, typename RootDistributionType>
 void predict(
 	const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
 	const K& observation, const unsigned int* path,
 	const unsigned int* const* excluded, const unsigned int* excluded_counts,
-	array<FeatureSet>& x, const V* const* root_probabilities)
+	array<FeatureSet>& x, const RootDistributionType& root_probabilities)
 {
 #if !defined(NDEBUG)
 	if (x.length > 0) {
@@ -3192,9 +3221,9 @@ void predict(
 }
 
 template<typename BaseDistribution, typename DataDistribution,
-	typename K, typename V, typename FeatureSet>
+	typename K, typename V, typename FeatureSet, typename RootDistributionType>
 inline void predict(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
-	const K& observation, array<FeatureSet>& x, const V* const* root_probabilities)
+	const K& observation, array<FeatureSet>& x, const RootDistributionType& root_probabilities)
 {
 	unsigned int* path = NULL;
 	unsigned int** excluded = NULL;
@@ -3223,37 +3252,73 @@ inline void predict(const hdp_sampler<BaseDistribution, DataDistribution, K, V>&
  * 'posterior' array, as the above code does).
  */
 
-/**
- * Constructs a map from observations to a vector, of which
- * each element is the probability of assigning that
- * observation to each table at the root (without taking
- * into account table sizes and the alpha parameter).
- */
-template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
-V** compute_root_probabilities(
-	const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
-	const K* observations, unsigned int observation_count)
+template<typename NodeType, typename V>
+inline V compute_maximum(
+		const NodeType& n, const V* const* root_probabilities,
+		const V* probabilities, unsigned int row_count)
 {
-	V** probabilities = (V**) malloc(sizeof(V*) * observation_count);
-	if (probabilities == NULL) {
-		fprintf(stderr, "compute_root_probabilities ERROR: Insufficient memory for matrix.\n");
-		return NULL;
+	V maximum = 0.0;
+	for (unsigned int i = 0; i < row_count; i++) {
+		V maximum_i = probabilities[i];
+		const V* root = root_probabilities[i];
+		for (unsigned int j = 0; j < n.table_count; j++)
+			if (n.table_sizes[j] > 0 && root[n.root_assignments[j]] > maximum_i)
+				maximum_i = root[n.root_assignments[j]];
+		maximum += maximum_i;
 	}
-	for (unsigned int i = 0; i < observation_count; i++) {
-		probabilities[i] = (V*) malloc(sizeof(V) * h.table_count);
-		if (probabilities[i] == NULL) {
-			fprintf(stderr, "compute_root_probabilities ERROR: Insufficient memory for matrix row.\n");
-			return NULL;
+	return maximum;
+}
+
+template<typename NodeType, typename V>
+inline V compute_maximum(
+		const NodeType& n, const array<unsigned int>* root_tables,
+		const V* probabilities, unsigned int row_count)
+{
+	V maximum = 0.0;
+	for (unsigned int i = 0; i < row_count; i++) {
+		V maximum_i = probabilities[i];
+		const array<unsigned int>& root = root_tables[i];
+		for (unsigned int j = 0; j < n.table_count; j++) {
+			if (n.table_sizes[j] > 0 && root.contains(n.root_assignments[j])) {
+				maximum_i = 1.0;
+				break;
+			}
 		}
-		for (unsigned int j = 0; j < h.table_count; j++) {
-			if (h.descendant_observations[j].counts.size == 0)
-				/* theoretically, this should be the prior probability, but
-				   since the table is empty, the likelihood will be zero anyway */
-				probabilities[i][j] = 0.0;
-			else probabilities[i][j] = DataDistribution::conditional(h.pi(), observations[i], h.descendant_observations[j]);
+		maximum += maximum_i;
+	}
+	return maximum;
+}
+
+template<typename NodeType, typename V, typename RootDistributionType>
+inline V compute_maximum(const NodeType& n,
+		const RootDistributionType& root_probabilities, const V* probabilities,
+		const unsigned int* excluded, unsigned int excluded_count,
+		unsigned int row_count)
+{
+	if (excluded_count == 0)
+		return compute_maximum(n, root_probabilities, probabilities, row_count);
+
+	V maximum = 0.0;
+	unsigned int i = 0, j = 0;
+	while (i < excluded_count && j < n.children.size) {
+		if (excluded[i] == n.children.keys[j]) {
+			/* this child is excluded */
+			i++; j++;
+		} else if (excluded[i] < n.children.keys[j]) {
+			i++;
+		} else {
+			V new_maximum = compute_maximum(n.children.values[j], root_probabilities, probabilities, row_count);
+			if (new_maximum > maximum) maximum = new_maximum;
+			j++;
 		}
 	}
-	return probabilities;
+
+	while (j < n.children.size) {
+		V new_maximum = compute_maximum(n.children.values[j], root_probabilities, probabilities, row_count);
+		if (new_maximum > maximum) maximum = new_maximum;
+		j++;
+	}
+	return maximum;
 }
 
 template<typename NodeType, typename V, typename FeatureSet>
@@ -3321,9 +3386,9 @@ inline void complete_path_distribution(
 	completed.sort_excluded(level);
 }
 
-template<typename K, typename V, typename FeatureSet>
+template<typename K, typename V, typename RootDistributionType, typename FeatureSet>
 inline void complete_path_distribution(const node_sampler<K, V>& leaf,
-	const V* const* root_probabilities, const unsigned int* path,
+	const RootDistributionType& root_probabilities, const unsigned int* path,
 	const V* probabilities, unsigned int row_count, unsigned int new_key,
 	unsigned int level, unsigned int depth, hash_map<FeatureSet, V*>& x)
 {
@@ -3369,9 +3434,9 @@ inline void complete_path_distribution(const node_sampler<K, V>& leaf,
 	x.table.size++;
 }
 
-template<typename K, typename V, typename FeatureSet>
+template<typename K, typename V, typename RootDistributionType, typename FeatureSet>
 void push_node_state(const node_sampler<K, V>& child,
-	const V* const* root_probabilities, unsigned int row_count,
+	const RootDistributionType& root_probabilities, unsigned int row_count,
 	const unsigned int* path, const V* probabilities,
 	unsigned int new_key, unsigned int level, unsigned int depth,
 	array<hdp_search_state<K, V>>& queue, hash_map<FeatureSet, V*>& x)
@@ -3416,15 +3481,16 @@ void push_node_state(const node_sampler<K, V>& child,
 				root_probabilities[i], probabilities[i], child.alpha());
 	}
 	state.probabilities[row_count] = probabilities[row_count] * child.alpha() / (child.alpha() + child.customer_count);
-	state.maximum = compute_maximum(child, root_probabilities, state.probabilities);
+	state.maximum = compute_maximum(child, root_probabilities, state.probabilities, row_count);
 
 	queue.length++;
 	std::push_heap(queue.data, queue.data + queue.length);
 }
 
-template<typename NodeType, typename K, typename V, typename FeatureSet>
+template<typename NodeType, typename K, typename V,
+	typename RootDistributionType, typename FeatureSet>
 void process_search_state(
-	const NodeType& n, const V* const* root_probabilities,
+	const NodeType& n, const RootDistributionType& root_probabilities,
 	unsigned int row_count, const unsigned int* path,
 	const unsigned int* const* excluded, const unsigned int* excluded_counts,
 	const V* probabilities, unsigned int level, unsigned int depth,
@@ -3472,12 +3538,13 @@ void process_search_state(
 }
 
 template<typename BaseDistribution, typename DataDistribution,
-	typename K, typename V, typename FeatureSet>
+	typename K, typename V, typename FeatureSet, typename RootDistributionType>
 void predict(
 	const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
 	const unsigned int* path, const unsigned int* const* excluded,
 	const unsigned int* excluded_counts, hash_map<FeatureSet, V*>& x,
-	const K* observations, unsigned int observation_count, const V* const* root_probabilities)
+	const K* observations, unsigned int observation_count,
+	const RootDistributionType& root_probabilities)
 {
 #if !defined(NDEBUG)
 	if (size(x) > 0) {
@@ -3705,7 +3772,7 @@ bool discrete_hdp_test(const BaseParameters& base_params,
 	printf("discrete_hdp_test: Gathered %zu samples.\n", sampler.posterior.length);
 
 	array<weighted_feature_set<V>> paths = array<weighted_feature_set<V>>(32);
-	V** root_probabilities = compute_root_probabilities(sampler, (unsigned int) 1);
+	auto root_probabilities = cache.compute_root_probabilities(sampler, (unsigned int) 1);
 	predict(sampler, (unsigned int) 1, paths, root_probabilities);
 	cleanup_root_probabilities(root_probabilities, (unsigned int) sampler.posterior.length);
 

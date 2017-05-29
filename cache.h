@@ -16,7 +16,87 @@ template<typename K, typename V> struct node_sampler;
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V> struct hdp_sampler;
 
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V, class Enable = void>
-struct cache { /* TODO: create a default implementation */ };
+struct cache {
+	/* TODO: create a default implementation */
+
+	/**
+	 * Computes a matrix, where every row corresponds to a
+	 * sample from the posterior, and every column is a table
+	 * at the root node. Each element contains the probability
+	 * of assigning the given observation to each table at the
+	 * root (without taking into account table sizes and the
+	 * alpha parameter).
+	 */
+	V** compute_root_probabilities(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h, const K& observation)
+	{
+		/* TODO: there's a potential speedup with a single contiguous array */
+		/* initialize the root_probabilities array of arrays */
+		V** root_probabilities = (V**) malloc(sizeof(V*) * h.posterior.length);
+		if (root_probabilities == NULL) {
+			fprintf(stderr, "predict ERROR: Insufficient memory for root_probabilities.\n");
+			return NULL;
+		}
+
+		unsigned int sample_count = 0;
+		for (unsigned int i = 0; i < h.posterior.length; i++) {
+			root_probabilities[i] = (V*) malloc(sizeof(V) * h.posterior[i].table_count);
+			if (root_probabilities[i] == NULL) {
+				fprintf(stderr, "predict ERROR: Insufficient memory for root_probabilities[%u].\n", i);
+				cleanup_root_probabilities(root_probabilities, sample_count);
+				return NULL;
+			}
+			sample_count++;
+		}
+
+		/* store the appropriate conditional probabilities in root_probabilities */
+		for (unsigned int i = 0; i < h.posterior.length; i++) {
+			for (unsigned int j = 0; j < h.posterior[i].table_count; j++)
+				/* TODO: test numerical stability */
+				if (h.posterior[i].descendant_observations[j].counts.size == 0) {
+					/* theoretically, this should be the prior probability of 'observation',
+					   but since the table is empty, its likelihood will be zero anyway */
+					root_probabilities[i][j] = 0.0;
+				} else {
+					root_probabilities[i][j] = DataDistribution::conditional(
+							h.pi(), observation, h.posterior[i].descendant_observations[j]);
+				}
+		}
+
+		return root_probabilities;
+	}
+
+	/**
+	 * Constructs a map from observations to a vector, of which
+	 * each element is the probability of assigning that
+	 * observation to each table at the root (without taking
+	 * into account table sizes and the alpha parameter).
+	 */
+	V** compute_root_probabilities(
+		const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
+		const K* observations, unsigned int observation_count)
+	{
+		V** probabilities = (V**) malloc(sizeof(V*) * observation_count);
+		if (probabilities == NULL) {
+			fprintf(stderr, "cache.compute_root_probabilities ERROR: Insufficient memory for matrix.\n");
+			return NULL;
+		}
+		for (unsigned int i = 0; i < observation_count; i++) {
+			probabilities[i] = (V*) malloc(sizeof(V) * h.table_count);
+			if (probabilities[i] == NULL) {
+				fprintf(stderr, "cache.compute_root_probabilities ERROR: Insufficient memory for matrix row.\n");
+				return NULL;
+			}
+			for (unsigned int j = 0; j < h.table_count; j++) {
+				if (h.descendant_observations[j].counts.size == 0)
+					/* theoretically, this should be the prior probability, but
+					   since the table is empty, the likelihood will be zero anyway */
+					probabilities[i][j] = 0.0;
+				else probabilities[i][j] = DataDistribution::conditional(h.pi(), observations[i], h.descendant_observations[j]);
+			}
+		}
+		return probabilities;
+	}
+};
 
 /* this structure caches values of the log rising factorial
    log (pi + i)^(n) for various values of i and n */
@@ -984,6 +1064,12 @@ private:
 	}
 };
 
+
+/* forward declarations */
+
+void cleanup_root_probabilities(array<unsigned int>*, unsigned int);
+
+
 template<typename BaseDistribution, typename K, typename V>
 struct cache<BaseDistribution, constant<K>, K, V>
 {
@@ -1117,6 +1203,121 @@ struct cache<BaseDistribution, constant<K>, K, V>
 	inline bool is_valid(const sampler_root& root) const { return true; }
 
 	static inline void free(cache<BaseDistribution, constant<K>, K, V>& c) { c.~cache(); }
+
+	/**
+	 * Computes a matrix, where every row corresponds to a
+	 * sample from the posterior, and every column is a table
+	 * at the root node. Each element contains the probability
+	 * of assigning the given observation to each table at the
+	 * root (without taking into account table sizes and the
+	 * alpha parameter).
+	 */
+	array<unsigned int>* compute_root_probabilities(const sampler_root& h, const K& observation)
+	{
+		/* initialize the root_probabilities array of arrays */
+		array<unsigned int>* root_probabilities = (array<unsigned int>*)
+				malloc(h.posterior.length * sizeof(array<unsigned int>));
+		if (root_probabilities == NULL) {
+			fprintf(stderr, "cache.compute_root_probabilities ERROR: Insufficient memory for matrix.\n");
+			return NULL;
+		} for (unsigned int i = 0; i < h.posterior.length; i++) {
+			if (!array_init(root_probabilities[i], 8)) {
+				cleanup_root_probabilities(root_probabilities, i);
+				fprintf(stderr, "cache.compute_root_probabilities ERROR: Insufficient memory for matrix row.\n");
+				return NULL;
+			}
+		}
+
+		/* store the appropriate conditional probabilities in root_probabilities */
+		for (unsigned int i = 0; i < h.posterior.length; i++) {
+			for (unsigned int j = 0; j < h.posterior[i].table_count; j++) {
+				if (h.posterior[i].descendant_observations[j].counts.size == 0
+				 || h.posterior[i].descendant_observations[j].counts.keys[0] != observation)
+					continue;
+				if (!root_probabilities[i].add(j)) {
+					cleanup_root_probabilities(root_probabilities, h.posterior.length);
+					return NULL;
+				}
+			}
+		}
+
+		return root_probabilities;
+	}
+
+	/**
+	 * Constructs a map from observations to a vector, of which
+	 * each element is the probability of assigning that
+	 * observation to each table at the root (without taking
+	 * into account table sizes and the alpha parameter).
+	 *
+	 * This optimization exploits the fact that every table must
+	 * have at most one distinct observation. In addition,
+	 * probabilities in each vector are either 0 or 1. As a
+	 * result, the matrix is zero except for the diagonal, and
+	 * so we only return the diagonal.
+	 */
+	array<unsigned int>* compute_root_probabilities(
+			const sampler_root& h, const K* observations, unsigned int observation_count)
+	{
+		array<unsigned int>* probabilities = (array<unsigned int>*)
+				malloc(observation_count * sizeof(array<unsigned int>));
+		if (probabilities == NULL) {
+			fprintf(stderr, "cache.compute_root_probabilities ERROR: Insufficient memory for matrix.\n");
+			return NULL;
+		} for (unsigned int i = 0; i < observation_count; i++) {
+			if (!array_init(probabilities[i], 8)) {
+				cleanup_root_probabilities(probabilities, i);
+				fprintf(stderr, "cache.compute_root_probabilities ERROR: Insufficient memory for matrix row.\n");
+				return NULL;
+			}
+		}
+
+		K* table_observations = (K*) malloc(sizeof(K) * h.table_count);
+		if (table_observations == NULL) {
+			fprintf(stderr, "cache.compute_root_probabilities ERROR: Insufficient memory for table observation list.\n");
+			cleanup_root_probabilities(probabilities, observation_count); return NULL;
+		}
+
+		unsigned int* table_indices = (unsigned int*) malloc(sizeof(unsigned int) * h.table_count);
+		if (table_indices == NULL) {
+			fprintf(stderr, "cache.compute_root_probabilities ERROR: Insufficient memory for table indices.\n");
+			cleanup_root_probabilities(probabilities, observation_count);
+			core::free(table_observations); return NULL;
+		}
+
+		for (unsigned int j = 0; j < h.table_count; j++) {
+			table_indices[j] = j;
+			if (h.descendant_observations[j].counts.size == 0)
+				set_empty(table_observations[j]);
+			else table_observations[j] = h.descendant_observations[j].counts.keys[0];
+		}
+		if (h.table_count > 1)
+			sort(table_observations, table_indices, h.table_count, dummy_sorter());
+
+		auto intersect = [&](unsigned int first_index, unsigned int second_index) {
+				if (!probabilities[first_index].add(table_indices[second_index])) return false;
+				return true;
+			};
+
+		unsigned int i = 0, j = 0;
+		while (i < observation_count && j < h.table_count)
+		{
+			if (observations[i] == table_observations[j]) {
+				intersect(i, j);
+				j++;
+			} else if (observations[i] < table_observations[j]) {
+				i++;
+			} else {
+				j++;
+			}
+		}
+
+		for (unsigned int j = 0; j < h.table_count; j++)
+			if (!is_empty(table_observations[j])) core::free(table_observations[j]);
+		core::free(table_observations);
+		core::free(table_indices);
+		return probabilities;
+	}
 };
 
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
