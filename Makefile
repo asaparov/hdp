@@ -27,10 +27,10 @@ endif
 
 CPP=g++
 WARNING_FLAGS=-Wall -Wpedantic
-CPPFLAGS_DBG=$(WARNING_FLAGS) -I. -g -march=native -std=c++11 $(PKG_LIBS)
-CPPFLAGS=$(WARNING_FLAGS) -I. -O3 -fomit-frame-pointer -DNDEBUG -march=native -std=c++11 -fno-stack-protector $(PKG_LIBS)
-LDFLAGS_DBG=-g $(LIB_PATHS)
-LDFLAGS=$(LIB_PATHS) -fwhole-program
+override CPPFLAGS_DBG += $(WARNING_FLAGS) -I. -g -march=native -std=c++11 $(PKG_LIBS)
+override CPPFLAGS += $(WARNING_FLAGS) -I. -O3 -fomit-frame-pointer -DNDEBUG -march=native -std=c++11 -fno-stack-protector $(PKG_LIBS)
+override LDFLAGS_DBG += -g $(LIB_PATHS)
+override LDFLAGS += $(LIB_PATHS) -fwhole-program
 
 
 #

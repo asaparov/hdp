@@ -1,0 +1,4 @@
+*.d
+*.o
+hdp_mcmc
+hdp_mcmc_dbg
