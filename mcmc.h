@@ -19,6 +19,20 @@
 #include "hdp.h"
 #include "cache.h"
 
+namespace detail {
+	template<typename Stream, typename Printer> static auto test_level_printable(int) ->
+			decltype(bool(print(0u, std::declval<Stream&>(), std::declval<Printer&>(), 0u)), std::true_type{});
+	template<typename Stream, typename Printer> static auto test_level_printable(long) -> std::false_type;
+}
+
+template<typename Stream, typename Printer> struct is_level_printable : decltype(detail::test_level_printable<Stream, Printer>(0)){};
+
+template<typename Stream, typename Printer,
+	typename std::enable_if<!is_level_printable<Stream, Printer>::value>::type* = nullptr>
+inline bool print(unsigned int u, Stream& stream, Printer& printer, unsigned int level) {
+	return print(u, stream, printer);
+}
+
 /* forward declarations */
 
 template<typename DataDistribution, typename NodeType, typename BaseDistribution, typename Observations>
