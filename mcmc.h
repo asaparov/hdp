@@ -10,7 +10,6 @@
 #define MCMC_H_
 
 #include <core/io.h>
-#include <math/sparse_vector.h>
 #include <math/distributions.h>
 #include <math/log.h>
 
@@ -25,7 +24,7 @@ namespace detail {
 	template<typename Stream, typename Printer> static auto test_level_printable(long) -> std::false_type;
 }
 
-template<typename Stream, typename Printer> struct is_level_printable : decltype(detail::test_level_printable<Stream, Printer>(0)){};
+template<typename Stream, typename Printer> struct is_level_printable : decltype(::detail::test_level_printable<Stream, Printer>(0)){};
 
 template<typename Stream, typename Printer,
 	typename std::enable_if<!is_level_printable<Stream, Printer>::value>::type* = nullptr>
@@ -488,7 +487,7 @@ struct node_sampler
 		const node_sampler<K, V>& n, const Metric& metric)
 	{
 		long unsigned int sum = core::size_of(n.observation_assignments)
-				+ core::size_of(n.children, make_key_value_metric(dummy_metric(), metric))
+				+ core::size_of(n.children, make_key_value_metric(default_metric(), metric))
 				+ core::size_of(n.customer_count) + core::size_of(n.parent)
 				+ core::size_of(n.observations, metric) + core::size_of(n.table_count)
 				+ core::size_of(n.table_capacity) + core::size_of(n.posterior);
@@ -1291,7 +1290,7 @@ bool print(const NodeType& node, Stream& out,
 		array_histogram<K> histogram = array_histogram<K>(node.observation_count());
 		for (const K& observation : node.n->observations)
 			histogram.add_unsorted(observation);
-		insertion_sort(histogram.counts.keys, histogram.counts.values, (unsigned int) histogram.counts.size, dummy_sorter());
+		insertion_sort(histogram.counts.keys, histogram.counts.values, (unsigned int) histogram.counts.size, default_sorter());
 
 		for (unsigned int i = 0; i < histogram.counts.size; i++) {
 			if (i > 0) success &= print(", ", out);
@@ -1425,7 +1424,7 @@ bool read_sampler_node(NodeType& n, Stream& stream,
 		inverse_indices[i] = i;
 	}
 	if (hdp_node.children.size > 1) {
-		sort(keys, indices, hdp_node.children.size, dummy_sorter());
+		sort(keys, indices, hdp_node.children.size, default_sorter());
 		sort(indices, inverse_indices, hdp_node.children.size);
 	}
 	for (unsigned int i = 0; i < hdp_node.children.size; i++)
@@ -1750,7 +1749,7 @@ void prepare_sampler(node_sampler<K, V>& n, unsigned int root_table_count)
 			continue;
 		quick_sort(n.descendant_observations[j].counts.keys,
 				n.descendant_observations[j].counts.values,
-				(unsigned int) n.descendant_observations[j].counts.size, dummy_sorter());
+				(unsigned int) n.descendant_observations[j].counts.size, default_sorter());
 	}
 
 	/* recurse to all descendants */

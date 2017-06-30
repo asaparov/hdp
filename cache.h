@@ -139,7 +139,7 @@ struct rising_factorial_cache {
 
 		const V* internal_array = log_factorials.data;
 		if (!contains)
-			sort(values.keys, values.values, (unsigned int) values.size, dummy_sorter());
+			sort(values.keys, values.values, (unsigned int) values.size, default_sorter());
 		return internal_array;
 	}
 
@@ -163,7 +163,7 @@ struct rising_factorial_cache {
 
 	template<typename Metric>
 	static inline long unsigned int size_of(const rising_factorial_cache<V>& cache, const Metric& metric) {
-		return core::size_of(cache.values, make_key_value_metric(dummy_metric(), metric)) + core::size_of(cache.pi);
+		return core::size_of(cache.values, make_key_value_metric(default_metric(), metric)) + core::size_of(cache.pi);
 	}
 
 	static inline void free(rising_factorial_cache<V>& cache) {
@@ -947,7 +947,7 @@ struct cache<BaseDistribution, dense_categorical<V>, unsigned int, V,
 		const cache<BaseDistribution, dense_categorical<V>, unsigned int, V>& cache,
 		unsigned int table_count)
 	{
-		return core::size_of(cache.distributions, make_key_value_metric(dummy_metric(), table_count))
+		return core::size_of(cache.distributions, make_key_value_metric(default_metric(), table_count))
 			 + core::size_of(cache.table_counts)
 			 + core::size_of(cache.factorial_cache)
 			 + core::size_of(cache.table_histogram);
@@ -1292,7 +1292,7 @@ struct cache<BaseDistribution, constant<K>, K, V>
 			else table_observations[j] = h.descendant_observations[j].counts.keys[0];
 		}
 		if (h.table_count > 1)
-			sort(table_observations, table_indices, h.table_count, dummy_sorter());
+			sort(table_observations, table_indices, h.table_count, default_sorter());
 
 		auto intersect = [&](unsigned int first_index, unsigned int second_index) {
 				if (!probabilities[first_index].add(table_indices[second_index])) return false;

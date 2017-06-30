@@ -56,7 +56,7 @@ struct node {
 	template<typename Metric>
 	static inline long unsigned int size_of(const node<K, V>& n, const Metric& metric) {
 		long unsigned int sum = core::size_of(n.alpha) + core::size_of(n.log_alpha)
-			+ core::size_of(n.children, make_key_value_metric(dummy_metric(), metric))
+			+ core::size_of(n.children, make_key_value_metric(default_metric(), metric))
 			+ core::size_of(n.customer_count) + core::size_of(n.observations, metric)
 			+ core::size_of(n.table_count) + core::size_of(n.table_capacity)
 			+ core::size_of(n.posterior);
@@ -169,7 +169,7 @@ bool read_node(NodeType& node, FILE* in, AtomReader& atom_reader, KeyReader& key
 		return false;
 	}
 	if (node.children.size > 1)
-		sort(node.children.keys, node.children.values, node.children.size, dummy_sorter());
+		sort(node.children.keys, node.children.values, node.children.size, default_sorter());
 	return true;
 }
 
