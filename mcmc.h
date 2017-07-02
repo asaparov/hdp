@@ -2515,7 +2515,7 @@ bool add(NodeType n, const BaseDistribution& pi,
 		shift_right(n.node.n->children.keys, (unsigned int) n.node.n->children.size, index);
 		shift_right(n.node.n->children.values, (unsigned int) n.node.n->children.size, index);
 		node<K, V>& child = n.node.n->children.values[index];
-		if (!init(child, *alpha, 1, 8)) {
+		if (!init(child, *alpha)) {
 			fprintf(stderr, "add ERROR: Error creating new child.\n");
 			return false;
 		}
