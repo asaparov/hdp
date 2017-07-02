@@ -1,8 +1,13 @@
 /**
- * cache.h - Data structures for optimizing MCMC for the HDP.
+ * \file cache.h
  *
- *  Created on: Jul 11, 2016
- *      Author: asaparov
+ * This file contains the ::cache structure, which optimizes MCMC inference for
+ * the HDP. This structure is specialized for various combinations of
+ * `BaseDistribution` and `DataDistribution`, and the specializations are also
+ * implemented in this file.
+ *
+ *  <!-- Created on: Jul 11, 2016
+ *           Author: asaparov -->
  */
 
 #ifndef CACHE_H_
@@ -11,13 +16,126 @@
 #include <math/distributions.h>
 
 /* forward declarations */
-
+#if !defined(DOXYGEN_IGNORE)
 template<typename K, typename V> struct node_sampler;
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V> struct hdp_sampler;
+#endif
 
+
+template<typename K>
+constexpr unsigned int count(const K& observation) {
+	return 1;
+}
+
+template<typename K>
+inline unsigned int count(const array_histogram<K>& observations) {
+	return observations.sum;
+}
+
+template<typename V>
+inline void cleanup_root_probabilities(V** root_probabilities, unsigned int row_count)
+{
+	for (unsigned int i = 0; i < row_count; i++)
+		free(root_probabilities[i]);
+	free(root_probabilities);
+}
+
+inline void cleanup_root_probabilities(array<unsigned int>* root_probabilities, unsigned int row_count)
+{
+	for (unsigned int i = 0; i < row_count; i++)
+		free(root_probabilities[i]);
+	free(root_probabilities);
+}
+
+/* a default implementation that various cache implementations can use */
+template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
+V** compute_root_probabilities(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h, const K& observation)
+{
+	/* TODO: there's a potential speedup with a single contiguous array */
+	/* initialize the root_probabilities array of arrays */
+	V** root_probabilities = (V**) malloc(sizeof(V*) * h.posterior.length);
+	if (root_probabilities == NULL) {
+		fprintf(stderr, "predict ERROR: Insufficient memory for root_probabilities.\n");
+		return NULL;
+	}
+
+	unsigned int sample_count = 0;
+	for (unsigned int i = 0; i < h.posterior.length; i++) {
+		root_probabilities[i] = (V*) malloc(sizeof(V) * h.posterior[i].table_count);
+		if (root_probabilities[i] == NULL) {
+			fprintf(stderr, "predict ERROR: Insufficient memory for root_probabilities[%u].\n", i);
+			cleanup_root_probabilities(root_probabilities, sample_count);
+			return NULL;
+		}
+		sample_count++;
+	}
+
+	/* store the appropriate conditional probabilities in root_probabilities */
+	for (unsigned int i = 0; i < h.posterior.length; i++) {
+		for (unsigned int j = 0; j < h.posterior[i].table_count; j++)
+			/* TODO: test numerical stability */
+			if (h.posterior[i].descendant_observations[j].counts.size == 0) {
+				/* theoretically, this should be the prior probability of 'observation',
+					but since the table is empty, its likelihood will be zero anyway */
+				root_probabilities[i][j] = 0.0;
+			} else {
+				root_probabilities[i][j] = DataDistribution::conditional(
+						h.pi(), observation, h.posterior[i].descendant_observations[j]);
+			}
+	}
+
+	return root_probabilities;
+}
+
+/* a default implementation that various cache implementations can use */
+template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
+V** compute_root_probabilities(
+	const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
+	const K* observations, unsigned int observation_count)
+{
+	V** probabilities = (V**) malloc(sizeof(V*) * observation_count);
+	if (probabilities == NULL) {
+		fprintf(stderr, "cache.compute_root_probabilities ERROR: Insufficient memory for matrix.\n");
+		return NULL;
+	}
+	for (unsigned int i = 0; i < observation_count; i++) {
+		probabilities[i] = (V*) malloc(sizeof(V) * h.table_count);
+		if (probabilities[i] == NULL) {
+			fprintf(stderr, "cache.compute_root_probabilities ERROR: Insufficient memory for matrix row.\n");
+			return NULL;
+		}
+		for (unsigned int j = 0; j < h.table_count; j++) {
+			if (h.descendant_observations[j].counts.size == 0)
+				/* theoretically, this should be the prior probability, but
+					since the table is empty, the likelihood will be zero anyway */
+				probabilities[i][j] = 0.0;
+			else probabilities[i][j] = DataDistribution::conditional(h.pi(), observations[i], h.descendant_observations[j]);
+		}
+	}
+	return probabilities;
+}
+
+/**
+ * This structure is used to provide optimizations for the Gibbs sampler in
+ * mcmc.h for specific combinations of `BaseDistribution` and
+ * `DataDistribution`. This struct is specialized for those particular
+ * combinations of base distribution and likelihood. These specializations are
+ * implemented further down in this file. Currently, a default implementation
+ * is unavailable.
+ */
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V, class Enable = void>
 struct cache {
 	/* TODO: create a default implementation */
+	typedef hdp_sampler<BaseDistribution, dense_categorical<V>, unsigned int, V> sampler_root;
+
+	/**
+	 * Constructs a cache structure for the HDP sampler hierarchy rooted at `h`.
+	 */
+	cache(const sampler_root& h) {
+		fprintf(stderr, "cache ERROR: Unimplemented. This combination of "
+			"BaseDistribution and DataDistribution is currently unsupported.\n");
+		exit(EXIT_FAILURE);
+	}
 
 	/**
 	 * Computes a matrix, where every row corresponds to a
@@ -27,42 +145,8 @@ struct cache {
 	 * root (without taking into account table sizes and the
 	 * alpha parameter).
 	 */
-	V** compute_root_probabilities(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h, const K& observation)
-	{
-		/* TODO: there's a potential speedup with a single contiguous array */
-		/* initialize the root_probabilities array of arrays */
-		V** root_probabilities = (V**) malloc(sizeof(V*) * h.posterior.length);
-		if (root_probabilities == NULL) {
-			fprintf(stderr, "predict ERROR: Insufficient memory for root_probabilities.\n");
-			return NULL;
-		}
-
-		unsigned int sample_count = 0;
-		for (unsigned int i = 0; i < h.posterior.length; i++) {
-			root_probabilities[i] = (V*) malloc(sizeof(V) * h.posterior[i].table_count);
-			if (root_probabilities[i] == NULL) {
-				fprintf(stderr, "predict ERROR: Insufficient memory for root_probabilities[%u].\n", i);
-				cleanup_root_probabilities(root_probabilities, sample_count);
-				return NULL;
-			}
-			sample_count++;
-		}
-
-		/* store the appropriate conditional probabilities in root_probabilities */
-		for (unsigned int i = 0; i < h.posterior.length; i++) {
-			for (unsigned int j = 0; j < h.posterior[i].table_count; j++)
-				/* TODO: test numerical stability */
-				if (h.posterior[i].descendant_observations[j].counts.size == 0) {
-					/* theoretically, this should be the prior probability of 'observation',
-					   but since the table is empty, its likelihood will be zero anyway */
-					root_probabilities[i][j] = 0.0;
-				} else {
-					root_probabilities[i][j] = DataDistribution::conditional(
-							h.pi(), observation, h.posterior[i].descendant_observations[j]);
-				}
-		}
-
-		return root_probabilities;
+	inline V** compute_root_probabilities(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h, const K& observation) {
+		return ::compute_root_probabilities(h, observation);
 	}
 
 	/**
@@ -71,30 +155,11 @@ struct cache {
 	 * observation to each table at the root (without taking
 	 * into account table sizes and the alpha parameter).
 	 */
-	V** compute_root_probabilities(
+	inline V** compute_root_probabilities(
 		const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
 		const K* observations, unsigned int observation_count)
 	{
-		V** probabilities = (V**) malloc(sizeof(V*) * observation_count);
-		if (probabilities == NULL) {
-			fprintf(stderr, "cache.compute_root_probabilities ERROR: Insufficient memory for matrix.\n");
-			return NULL;
-		}
-		for (unsigned int i = 0; i < observation_count; i++) {
-			probabilities[i] = (V*) malloc(sizeof(V) * h.table_count);
-			if (probabilities[i] == NULL) {
-				fprintf(stderr, "cache.compute_root_probabilities ERROR: Insufficient memory for matrix row.\n");
-				return NULL;
-			}
-			for (unsigned int j = 0; j < h.table_count; j++) {
-				if (h.descendant_observations[j].counts.size == 0)
-					/* theoretically, this should be the prior probability, but
-					   since the table is empty, the likelihood will be zero anyway */
-					probabilities[i][j] = 0.0;
-				else probabilities[i][j] = DataDistribution::conditional(h.pi(), observations[i], h.descendant_observations[j]);
-			}
-		}
-		return probabilities;
+		return ::compute_root_probabilities(h, observations, observation_count);
 	}
 };
 
@@ -364,6 +429,10 @@ inline bool init(table_distribution<V>& distribution, unsigned int table_count) 
 	return true;
 }
 
+/**
+ * A specialization of ::cache where the `BaseDistribution` satisfies
+ * is_dirichlet and the `DataDistribution` is dense_categorical.
+ */
 template<typename BaseDistribution, typename V>
 struct cache<BaseDistribution, dense_categorical<V>, unsigned int, V,
 	typename std::enable_if<is_dirichlet<BaseDistribution>::value>::type>
@@ -409,6 +478,9 @@ struct cache<BaseDistribution, dense_categorical<V>, unsigned int, V,
 
 	rising_factorial_cache<V> factorial_cache;
 
+	/**
+	 * Constructs a cache structure for the HDP sampler hierarchy rooted at `h`.
+	 */
 	cache(const sampler_root& h) :
 			distributions(16), table_histogram(16), table_counts(128), factorial_cache(h.pi().sum()) { }
 	~cache() { free(); }
@@ -953,6 +1025,30 @@ struct cache<BaseDistribution, dense_categorical<V>, unsigned int, V,
 			 + core::size_of(cache.table_histogram);
 	}
 
+	/**
+	 * Computes a matrix, where every row corresponds to a
+	 * sample from the posterior, and every column is a table
+	 * at the root node. Each element contains the probability
+	 * of assigning the given observation to each table at the
+	 * root (without taking into account table sizes and the
+	 * alpha parameter).
+	 */
+	inline V** compute_root_probabilities(const sampler_root& h, const unsigned int& observation) const {
+		return ::compute_root_probabilities(h, observation);
+	}
+
+	/**
+	 * Constructs a map from observations to a vector, of which
+	 * each element is the probability of assigning that
+	 * observation to each table at the root (without taking
+	 * into account table sizes and the alpha parameter).
+	 */
+	inline V** compute_root_probabilities(sampler_root& h,
+		const unsigned int* observations, unsigned int observation_count) const
+	{
+		return ::compute_root_probabilities(h, observations, observation_count);
+	}
+
 private:
 	inline bool add_to_new_table(array_map<unsigned int, unsigned int>& map,
 			unsigned int src_index, unsigned int dst_table, unsigned int count)
@@ -1054,7 +1150,6 @@ private:
 		c.~cache();
 	}
 
-private:
 	inline void free() {
 		for (unsigned int i = 0; i < distributions.size; i++)
 			core::free(distributions.values[i]);
@@ -1065,11 +1160,10 @@ private:
 };
 
 
-/* forward declarations */
-
-void cleanup_root_probabilities(array<unsigned int>*, unsigned int);
-
-
+/**
+ * A specialization of ::cache where the `DataDistribution` is a constant
+ * (degenerate) distribution. There is no restriction on `BaseDistribution`.
+ */
 template<typename BaseDistribution, typename K, typename V>
 struct cache<BaseDistribution, constant<K>, K, V>
 {
@@ -1093,6 +1187,9 @@ struct cache<BaseDistribution, constant<K>, K, V>
 		}
 	};
 
+	/**
+	 * Constructs a cache structure for the HDP sampler hierarchy rooted at `h`.
+	 */
 	cache(const sampler_root& h) { }
 
 	const K& first(const K& item) const {

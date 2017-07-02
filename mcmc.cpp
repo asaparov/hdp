@@ -1,8 +1,8 @@
 /**
- * mcmc.cpp
+ * \file mcmc.cpp
  *
- *  Created on: Jul 31, 2015
- *      Author: asaparov
+ *  <!-- Created on: Jul 31, 2015
+ *           Author: asaparov -->
  */
 
 #include "mcmc.h"

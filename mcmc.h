@@ -1,9 +1,140 @@
 /**
- * mcmc.h - Markov chain Monte Carlo inference
- *		for hierarchical Dirichlet processes.
+ * \file mcmc.h
  *
- *  Created on: Jul 26, 2015
- *      Author: asaparov
+ * This file implements Markov chain Monte Carlo inference for Dirichlet
+ * processes (DP) and hierarchical Dirichlet processes (HDP). More
+ * specifically, this file implements a Gibbs sampler for the Chinese
+ * restaurant representation. See hdp.h for a description of DPs, HDPs, and the
+ * Chinese restaurant representation.
+ *
+ * Code example
+ * ------------
+ *
+ * The following is an example of an HDP mixture model where the base
+ * distribution is a symmetric Dirichlet distribution with parameter 1. The
+ * likelihood distribution is a categorical over the set of ASCII characters,
+ * which we encode as an unsigned int in `{1, 2, ..., 256}`.
+ * ```{.cpp}
+ * #include <hdp/mcmc.h>
+ * using namespace core;
+ *
+ * constexpr unsigned int depth = 2;
+ *
+ * template<typename BaseDistribution, typename Likelihood, typename K, typename V>
+ * void posterior_predictive_probability(
+ * 		const hdp_sampler<BaseDistribution, Likelihood, K, V>& sampler,
+ * 		const cache<BaseDistribution, Likelihood, K, V>& cache,
+ * 		const K& observation)
+ * {
+ * 	array<weighted_feature_set<V>> paths(32);
+ * 	auto root_probabilities = cache.compute_root_probabilities(sampler, observation);
+ * 	predict(sampler, observation, paths, root_probabilities);
+ * 	cleanup_root_probabilities(root_probabilities, sampler.posterior.length);
+ *
+ * 	sort(paths, feature_set_sorter(depth));
+ * 	for (unsigned int i = 0; i < paths.length; i++) {
+ * 		unsigned int*& path = paths[i].features.features;
+ * 		print("probability of drawing '", stdout);
+ * 		print((char) observation, stdout);
+ * 		if (path[0] == IMPLICIT_NODE) {
+ * 			print("' from any other child node: ", stdout);
+ * 		} else {
+ * 			print("' from child node ", stdout);
+ * 			print(path[0], stdout); print(": ", stdout);
+ * 		}
+ * 		print(exp(paths[i].log_probability), stdout);
+ * 		print('\n', stdout);
+ * 		free(paths[i]);
+ * 	}
+ * }
+ *
+ * template<typename BaseDistribution, typename Likelihood, typename K, typename V>
+ * void do_inference(hdp<BaseDistribution, Likelihood, K, V>& h) {
+ * 	hdp_sampler<BaseDistribution, Likelihood, K, V> sampler(h);
+ * 	cache<BaseDistribution, Likelihood, K, V> cache(sampler);
+ *
+ * 	prepare_sampler(sampler, cache);
+ * 	for (unsigned int i = 0; i < 200; i++)
+ * 		sample_hdp<true>(sampler, cache);
+ * 	for (unsigned int i = 0; i < 800; i++) {
+ * 		sample_hdp<true>(sampler, cache);
+ * 		if (i % 5 == 0) sampler.add_sample();
+ * 	}
+ *
+ * 	posterior_predictive_probability(sampler, cache, (unsigned int) '+');
+ * 	posterior_predictive_probability(sampler, cache, (unsigned int) '-');
+ * 	posterior_predictive_probability(sampler, cache, (unsigned int) 'a');
+ * }
+ *
+ * int main() {
+ * 	double alpha[] = {1.0e6, 1.0e-2};
+ * 	dirichlet<double> base_distribution(256, 1.0);
+ * 	hdp<dirichlet<double>, dense_categorical<double>, unsigned int, double> h(base_distribution, alpha, depth);
+ *
+ * 	unsigned int first_child[] = { 1 };
+ * 	unsigned int second_child[] = { 2 };
+ * 	for (unsigned int i = 0; i < 100; i++) {
+ * 		add(h, first_child, depth, (unsigned int) '+');
+ * 		add(h, second_child, depth, (unsigned int) '-');
+ * 	}
+ *
+ * 	do_inference(h);
+ * }
+ * ```
+ * In this example, we use the following model:
+ * \f[
+ * 	\begin{align*}
+ * 		H &= \text{Dirichlet}([1, \ldots, 1]), \\
+ * 		G^{\textbf{0}} &\sim DP(H, 10^6), \\
+ * 		G^{\textbf{1}}, G^{\textbf{2}}, G^{\textbf{3}} &\sim DP(G_{\textbf{0}}, 10^{-2}), \\
+ * 		x^{\textbf{1}}_1, \ldots, x^{\textbf{1}}_{100} &\sim G_{\textbf{1}}, \\
+ * 		x^{\textbf{2}}_1, \ldots, x^{\textbf{2}}_{100} &\sim G_{\textbf{2}}, \\
+ * 		y^{\textbf{1}}_i &\sim \text{Categorical}(x^{\textbf{1}}_i) \text{ for } i = 1, \ldots, 100, \\
+ * 		y^{\textbf{2}}_i &\sim \text{Categorical}(x^{\textbf{2}}_i) \text{ for } i = 1, \ldots, 100.
+ * 	\end{align*}
+ * \f]
+ * The only variables we observe are: \f$ y^{\textbf{1}}_i = \texttt{`+'} \f$
+ * and \f$ y^{\textbf{2}}_i = \texttt{`-'} \f$ for
+ * \f$ i = 1, \ldots, 100 \f$. We want to compute the probabilities of:
+ * \f[
+ * 	\begin{equation*}
+ * 		p(y^{\textbf{1}}_{new} | \boldsymbol{y}), p(y^{\textbf{2}}_{new} | \boldsymbol{y}), p(y^{\textbf{3}}_{new} | \boldsymbol{y}),
+ * 	\end{equation*}
+ * \f]
+ * where \f$ \boldsymbol{y} \triangleq \{y^{\textbf{1}}_1, \ldots, y^{\textbf{1}}_{100}, y^{\textbf{2}}_1, \ldots, y^{\textbf{2}}_{100}\} \f$
+ * is the set of all observations, and each \f$ y^{\textbf{n}}_{new} \f$ is a
+ * new (previously unobserved) sample drawn from \f$ x^{\textbf{n}}_{new} \f$
+ * which is in turn drawn from \f$ G^{\textbf{n}} \f$ (i.e. the posterior
+ * predictive distribution). The above code does exactly this, and the expected
+ * output is:
+ * ```
+ * probability of drawing '+' from child node 1: 0.283680
+ * probability of drawing '+' from child node 2: 0.002809
+ * probability of drawing '+' from any other child node: 0.003907
+ * probability of drawing '-' from child node 1: 0.002809
+ * probability of drawing '-' from child node 2: 0.283680
+ * probability of drawing '-' from any other child node: 0.003907
+ * probability of drawing 'a' from child node 1: 0.002809
+ * probability of drawing 'a' from child node 2: 0.002809
+ * probability of drawing 'a' from any other child node: 0.003906
+ * ```
+ *
+ * The function `do_inference` constructs the hdp_sampler and ::cache
+ * structures necessary to perform MCMC sampling. hdp_sampler (and
+ * node_sampler) stores the variables used by the sampling algorithm. ::cache
+ * is a structure that optimizes the sampling algorithm for particular choices
+ * of the base distribution and likelihood. Once constructed, the function then
+ * executes 200 "burn-in" iterations, to allow the MCMC to mix (converge to the
+ * true posterior). Then, it performs 800 more iterations, keeping every fifth
+ * sample (to minimize autocorrelation among samples, since we want them to be
+ * as independent as possible). Finally, the function
+ * `posterior_predictive_probability` is called to compute the above
+ * probabilities.
+ *
+ * A unit test is also available in mcmc.cpp, as another example.
+ *
+ *  <!-- Created on: Jul 26, 2015
+ *           Author: asaparov -->
  */
 
 #ifndef MCMC_H_
@@ -33,7 +164,7 @@ inline bool print(unsigned int u, Stream& stream, Printer& printer, unsigned int
 }
 
 /* forward declarations */
-
+#if !defined(DOXYGEN_IGNORE)
 template<typename DataDistribution, typename NodeType, typename BaseDistribution, typename Observations>
 inline bool sample_initial_assignment(
         NodeType& n,
@@ -48,6 +179,7 @@ bool select_table(NodeType& n,
         unsigned int selected_table,
         unsigned int& new_table,
         Cache& cache);
+#endif
 
 
 static inline bool compare_histograms(
@@ -80,16 +212,6 @@ static inline void add_to_histogram(unsigned int* histogram,
 		fprintf(stderr, "add_to_histogram WARNING: Index out of bounds.\n");
 #endif
 	histogram[item]++;
-}
-
-template<typename K>
-constexpr unsigned int count(const K& observation) {
-	return 1;
-}
-
-template<typename K>
-inline unsigned int count(const array_histogram<K>& observations) {
-	return observations.sum;
 }
 
 
@@ -216,43 +338,134 @@ bool write(const node_sample<V>& sample, FILE* out, node_sample_scribe<AtomWrite
 	return true;
 }
 
+/**
+ * This structure stores Gibbs sampling variables for a single HDP non-root
+ * node (i.e. a ::node object). These "sampler" structures form a tree parallel
+ * to the HDP hierarchy consisting of ::hdp and ::node objects.
+ *
+ * Since the Gibbs sampler is derived using the Chinese restaurant
+ * representation, every node_sampler contains an infinite number of tables,
+ * but we only store the non-empty tables. The number of non-empty tables is
+ * given by node_sampler::table_count. However, during inference, the number of
+ * occupied tables may increase and decrease. As such, the node keeps a larger
+ * "capacity" of tables node_sampler::table_capacity to avoid reallocating
+ * memory at every sampling step. As long as `table_count <= table_capacity`,
+ * the algorithm doesn't need to reallocate memory. Every observation drawn
+ * from this node is assigned to a table (just as a customer picks a table at
+ * which to sit). All tables in this node are, in turn, sampled from the
+ * distribution of the parent node. As such, the tables in this node are
+ * assigned a table in the parent node.
+ *
+ * For an example of how to perform MCMC inference with DPs and HDPs, see the
+ * [code example above](#code-example).
+ *
+ * \tparam K the generic type of the observations drawn from this distribution.
+ * \tparam V the type of the probabilities.
+ */
 template<typename K, typename V>
 struct node_sampler
 {
+	/**
+	 * The generic type of the observations drawn from this distribution.
+	 */
 	typedef K atom_type;
+
+	/**
+	 * The type of the probabilities.
+	 */
 	typedef V value_type;
+
+	/**
+	 * The type of a child node of this node in the sampler hierarchy.
+	 */
 	typedef node_sampler<K, V> child_type;
+
+	/**
+	 * The "sampler" structures form a tree parallel to the HDP hierarchy which
+	 * consists of ::hdp and ::node objects. This typedef returns the type of
+	 * the object that this node_sampler represents in the HDP hierarchy.
+	 */
 	typedef node<K, V> node_type;
 
+	/**
+	 * A native array containing the child nodes of this node in the sampler
+	 * hierarchy. This array is parallel to the node::children and
+	 * hdp::children array maps.
+	 */
 	node_sampler<K, V>* children;
+
+	/**
+	 * A pointer to the parent node in the sampler hierarchy.
+	 */
 	node_sampler<K, V>* parent;
+
+	/**
+	 * The "sampler" structures form a tree parallel to the HDP hierarchy which
+	 * consists of ::hdp and ::node objects. This is a pointer to the node in
+	 * the HDP hierarchy that is parallel to this node.
+	 */
 	node<K, V>* n;
 
 	/**
-	 * state variables for Gibbs sampling
+	 * <!-- state variables for Gibbs sampling -->
+	 */
+
+	/**
+	 * An array parallel to node::observations that indicates which table in
+	 * this node each observation is assigned to.
 	 */
 	unsigned int* observation_assignments;
 
 	/**
-	 * In the Chinese restaurant representation, this is a
-	 * histogram of table assignments of the samples from
-	 * the CRP at this node.
-	 *
-	 * In the direct assignment representation, this is a
-	 * histogram of root assignments of the samples in the
-	 * CRP at this node.
+	 * An array with length node_sampler::table_count (and capacity
+	 * node_sampler::table_capacity) that keeps track of the number of
+	 * customers sitting at each table.
 	 */
 	unsigned int* table_sizes;
 
-	/* the tables in this CRP */
+	/**
+	 * Each table in this node is assigned to a table in the parent node. This
+	 * array with length node_sampler::table_count (and capacity
+	 * node_sampler::table_capacity) keeps track the assignments of tables in
+	 * this node to tables in the parent node.
+	 */
 	unsigned int* table_assignments;
+
+	/**
+	 * Since every table in every node in the sampler hierarchy is assigned to
+	 * a table in the parent node, we can follow the chain of table assignments
+	 * to tables in the root node. This array with length
+	 * node_sampler::table_count (and capacity node_sampler::table_capacity)
+	 * keeps track of the assignemnts of tables in this node to tables in the
+	 * root node.
+	 */
 	unsigned int* root_assignments;
+
+	/**
+	 * This array of array_histogram objects keeps track, for each table in
+	 * this node, the set of observations assigned to this table, either
+	 * directly or indirectly via descendant nodes in the hierarchy. This array
+	 * has length node_sampler::table_count and capacity
+	 * node_sampler::table_capacity.
+	 */
 	array_histogram<K>* descendant_observations;
+
+	/**
+	 * The number of occupied tables in the Chinese restaurant represented by
+	 * this sampler node.
+	 */
 	unsigned int table_count;
+
+	/**
+	 * The current capacity of tables in this sampler node.
+	 */
 	unsigned int table_capacity;
+
+	/**
+	 * The total number of customers sitting at all tables at this sampler node.
+	 */
 	unsigned int customer_count;
 
-	/* array of posterior samples */
 	array<node_sample<V>> posterior;
 
 	template<typename BaseDistribution, typename DataDistribution>
@@ -850,43 +1063,133 @@ bool write(const collapsed_root_sample<K, V>& sample, FILE* out, node_sample_scr
 	return true;
 }
 
+/**
+ * This structure stores Gibbs sampling variables for an HDP root node (i.e. an
+ * ::hdp object). These "sampler" structures form a tree parallel to the HDP
+ * hierarchy consisting of ::hdp and ::node objects.
+ *
+ * Since the Gibbs sampler is derived using the Chinese restaurant
+ * representation, every hdp_sampler contains an infinite number of tables, but
+ * we only store the non-empty tables. The number of non-empty tables is given
+ * by hdp_sampler::table_count. However, during inference, the number of
+ * occupied tables may increase and decrease. As such, the node keeps a larger
+ * "capacity" of tables hdp_sampler::table_capacity to avoid reallocating
+ * memory at every sampling step. As long as `table_count <= table_capacity`,
+ * the algorithm doesn't need to reallocate memory. Every observation drawn
+ * from this node is assigned to a table (just as a customer picks a table at
+ * which to sit).
+ *
+ * For an example of how to perform MCMC inference with DPs and HDPs, see the
+ * [code example above](#code-example).
+ *
+ * \tparam BaseDistribution the type of the base distribution (see ::hdp).
+ * \tparam DataDistribution the type of the likelihood (see ::hdp).
+ * \tparam K the generic type of the observations drawn from this distribution.
+ * \tparam V the type of the probabilities.
+ */
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
 struct hdp_sampler
 {
+	/**
+	 * The generic type of the observations drawn from this distribution.
+	 */
 	typedef K atom_type;
+
+	/**
+	 * The type of the probabilities.
+	 */
 	typedef V value_type;
+
+	/**
+	 * The type of the base distribution (see ::hdp).
+	 */
 	typedef BaseDistribution base_distribution_type;
+
+	/**
+	 * The type of the likelihood (see ::hdp).
+	 */
 	typedef DataDistribution data_distribution_type;
+
+	/**
+	 * The type of a child node of this node in the sampler hierarchy.
+	 */
 	typedef node_sampler<K, V> child_type;
+
+	/**
+	 * The "sampler" structures form a tree parallel to the HDP hierarchy which
+	 * consists of ::hdp and ::node objects. This typedef returns the type of
+	 * the object that this hdp_sampler represents in the HDP hierarchy.
+	 */
 	typedef hdp<BaseDistribution, DataDistribution, K, V> node_type;
 
+	/**
+	 * A native array containing the child nodes of this node in the sampler
+	 * hierarchy. This array is parallel to the node::children and
+	 * hdp::children array maps.
+	 */
 	node_sampler<K, V>* children;
+
+	/**
+	 * The "sampler" structures form a tree parallel to the HDP hierarchy which
+	 * consists of ::hdp and ::node objects. This is a pointer to the node in
+	 * the HDP hierarchy that is parallel to this node.
+	 */
 	node_type* n;
 
 	/**
-	 * state variables for Gibbs sampling
+	 * <!-- state variables for Gibbs sampling -->
+	 */
+
+	/**
+	 * An array parallel to hdp::observations that indicates which table in
+	 * this node each observation is assigned to.
 	 */
 	unsigned int* observation_assignments;
 
 	/**
-	 * In the Chinese restaurant representation, this is a
-	 * histogram of table assignments of the samples from
-	 * the CRP at this node.
-	 *
-	 * In the direct assignment representation, this is a
-	 * histogram of root assignments of the samples in the
-	 * CRP at this node.
+	 * An array with length node_sampler::table_count (and capacity
+	 * node_sampler::table_capacity) that keeps track of the number of
+	 * customers sitting at each table.
 	 */
 	unsigned int* table_sizes;
 
+	/**
+	 * This array of array_histogram objects keeps track, for each table in
+	 * this node, the set of observations assigned to this table, either
+	 * directly or indirectly via descendant nodes in the hierarchy. This array
+	 * has length node_sampler::table_count and capacity
+	 * node_sampler::table_capacity.
+	 */
 	array_histogram<K>* descendant_observations;
+
+	/**
+	 * The number of occupied tables in the Chinese restaurant represented by
+	 * this sampler root node.
+	 */
 	unsigned int table_count;
+
+	/**
+	 * The current capacity of tables in this sampler root node.
+	 */
 	unsigned int table_capacity;
+
+	/**
+	 * The total number of customers sitting at all tables at this sampler
+	 * root node.
+	 */
 	unsigned int customer_count;
 
-	/* storage for posterior samples */
 	array<collapsed_root_sample<K, V>> posterior;
 
+	/**
+	 * Constructs this root sampler node with the given `root` node from the
+	 * HDP hierarchy. All existing observations are assigned a table in the
+	 * hierarchy one-by-one, each time sampling the table assignment from the
+	 * conditional distribution: given that all other table assignments are
+	 * fixed, the assignment for each observation is sampled. This constructor
+	 * also initializes all descendant sampler nodes, recursively, parallel to
+	 * the HDP hierarchy.
+	 */
 	hdp_sampler(hdp<BaseDistribution, DataDistribution, K, V>& root) :
 		n(&root), table_count(0), table_capacity(8), posterior(32)
 	{
@@ -1215,6 +1518,15 @@ private:
 	friend bool read_sampler_node(A&, B&, typename A::node_type&, C&);
 };
 
+/**
+ * Initializes the given root sampler node `h` with the given `root` node from
+ * the HDP hierarchy. All existing observations are assigned a table in the
+ * hierarchy one-by-one, each time sampling the table assignment from the
+ * conditional distribution: given that all other table assignments are fixed,
+ * the assignment for each observation is sampled. This constructor also
+ * initializes all descendant sampler nodes, recursively, parallel to the HDP
+ * hierarchy.
+ */
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
 bool init(hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
 	hdp<BaseDistribution, DataDistribution, K, V>& root, int initial_table_count = 1)
@@ -1229,6 +1541,14 @@ bool init(hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
 	return h.initialize();
 }
 
+/**
+ * Copies the HDP sampler hierarchy rooted at `src` into a new sampler
+ * hierarchy rooted at `dst` (which should be uninitialized). The new sampler
+ * hierarchy may be associated with a new HDP hierarchy, rooted at `new_root`,
+ * in which case, `node_map` should contain a map of pointers to nodes from the
+ * old hierarchy to pointers to nodes in the new hierarchy. The `copy` function
+ * for ::hdp is one way to produce such a map.
+ */
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
 bool copy(
 	const hdp_sampler<BaseDistribution, DataDistribution, K, V>& src,
@@ -1280,6 +1600,19 @@ bool copy(
 	return true;
 }
 
+/**
+ * Prints the given sampler `node` to `out`.
+ * \tparam NodeType either node_sampler or hdp_sampler.
+ * \tparam KeyPrinter a scribe type for which the function
+ * 		`bool print(unsigned int, Stream&, KeyPrinter&)` or
+ * 		`bool print(unsigned int, Stream&, KeyPrinter&, unsigned int)` is defined
+ * 		(if the latter is defined, it will be called, and the level of the
+ * 		printed node is passed as the fourth argument). This scribe is used to
+ * 		print the `unsigned int` keys of child nodes in the hierarchy.
+ * \tparam AtomPrinter a scribe type for which the function
+ * 		`bool print(const K&, Stream&, AtomPrinter&)` is defined. This scribe
+ * 		is used to print the observations in the hierarchy.
+ */
 template<typename NodeType, typename Stream, typename KeyPrinter,
 	typename AtomPrinter, typename K = typename NodeType::atom_type>
 bool print(const NodeType& node, Stream& out,
@@ -1342,6 +1675,13 @@ bool read(node_sampler<K, V>& n, Stream& stream, node<K, V>& hdp_node, ParentTyp
 	return true;
 }
 
+/**
+ * Reads the sampler hierarchy rooted at `n` from `stream`. This function
+ * recursively reads all descendant nodes in the sampler hierarchy.
+ * \tparam KeyReader a scribe type for which the function
+ * 		`bool read(K&, Stream&, KeyReader&)` is defined. This scribe is used to
+ * 		read the observations in the hierarchy.
+ */
 template<typename BaseDistribution, typename DataDistribution,
 	typename K, typename V, typename Stream, typename KeyReader>
 bool read(hdp_sampler<BaseDistribution, DataDistribution, K, V>& n,
@@ -1372,6 +1712,13 @@ bool write(const node_sampler<K, V>& n, Stream& stream, KeyWriter& key_writer)
 		&& write(n.table_assignments, stream, n.table_count);
 }
 
+/**
+ * Writes the sampler hierarchy rooted at `n` to `stream`. This function
+ * recursively writes all descendant nodes in the sampler hierarchy.
+ * \tparam KeyWriter a scribe type for which the function
+ * 		`bool write(const K&, Stream&, KeyReader&)` is defined. This scribe is
+ * 		used to write the observations in the hierarchy.
+ */
 template<typename BaseDistribution, typename DataDistribution,
 	typename K, typename V, typename Stream, typename KeyWriter>
 bool write(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& n, Stream& stream, KeyWriter& key_writer)
@@ -1757,6 +2104,11 @@ void prepare_sampler(node_sampler<K, V>& n, unsigned int root_table_count)
 		prepare_sampler(n.children[i], root_table_count);
 }
 
+/**
+ * Performs the necessary operations to prepare the variables in the sampler
+ * hierarchy given by `h` and the `cache` for calls to sample_hdp. This
+ * function also recursively prepares all descendant sampler nodes.
+ */
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
 inline void prepare_sampler(
 		hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
@@ -1882,7 +2234,7 @@ inline sample_result<V> sample_table(
 
 
 /**
- * Below are functions for adding new customers to existing or new tables.
+ * <!-- Below are functions for adding new customers to existing or new tables. -->
  */
 
 /* initializes a new table at the existing position 'index' */
@@ -2184,11 +2536,25 @@ bool add(NodeType n, const BaseDistribution& pi,
 	}
 }
 
+/**
+ * Adds the given `observation` to the HDP hierarchy and sampler hierarchy
+ * represented by `h`. The node to which to add the observation is given by the
+ * `path`, which provides the indices to follow from each node to its child. If
+ * a node does not exist, it is created, with its concentration parameter
+ * copied from the appropriate index in hdp::alpha. Thus, `depth` cannot be
+ * larger than `hdp::depth` of `h`. If `depth == 1`, the observation is added
+ * to the root node.
+ *
+ * This function also assigns the observation to the table according to the
+ * conditional distribution: Conditioned on the fact that all other random
+ * variables are fixed (including the other seating assignments), we sample
+ * the seating assignment for this new observation.
+ */
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V, typename Cache>
 inline bool add(hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
-		const unsigned int* path, unsigned int length, const K& observation, Cache& cache)
+		const unsigned int* path, unsigned int depth, const K& observation, Cache& cache)
 {
-	return add(make_root_node(h), h.n->pi, h.n->alpha + 1, path, length, observation, cache);
+	return add(make_root_node(h), h.n->pi, h.n->alpha + 1, path, depth, observation, cache);
 }
 
 template<typename RootType, typename Observations, typename Cache>
@@ -2254,16 +2620,24 @@ bool remove(NodeType& n, RootType& root,
 	return remove(n.children[index], root, path + 1, length - 1, observation, cache);
 }
 
+/**
+ * Removes the given `observation` from the HDP hierarchy and sampler hierarchy
+ * represented by `h`. The node from which to remove the observation is given
+ * by the `path`, which provides the indices to follow from each node to its
+ * child. If a node does not exist, a warning is printed. `depth` cannot be
+ * larger than `hdp::depth` of `h`. If `depth == 1`, the observation is removed
+ * from the root node.
+ */
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V, typename Cache>
 inline bool remove(hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
-		const unsigned int* path, unsigned int length, const K& observation, Cache& cache)
+		const unsigned int* path, unsigned int depth, const K& observation, Cache& cache)
 {
-	return remove(h, h, path, length, observation, cache);
+	return remove(h, h, path, depth, observation, cache);
 }
 
 
 /**
- * Below are functions for moving existing customers to existing or new tables.
+ * <!-- Below are functions for moving existing customers to existing or new tables. -->
  */
 
 template<typename RootType, typename Observations, typename Cache>
@@ -2569,6 +2943,15 @@ void sample_nodes(NodeType& n, unsigned int depth, Cache& cache)
 	free(order);
 }
 
+/**
+ * Runs a single Gibbs iteration on the sampler node `h` and all descendant
+ * sampler nodes. This function assumes prepare_sampler was called beforehand.
+ * prepare_sampler does not need to be called again before the next iteration.
+ * \tparam Collapsed if `true`, the collapsed Gibbs sampler is used (where the
+ * 		root samples from the base distribution, phi, are integrated out). If
+ * 		`false` the uncollapsed Gibbs sampler is used. However, at this time,
+ * 		only collapsed Gibbs sampling is supported.
+ */
 template<bool Collapsed, typename BaseDistribution,
 	typename DataDistribution, typename K, typename V>
 inline void sample_hdp(
@@ -2585,8 +2968,8 @@ inline void sample_hdp(
 
 
 /**
- * Auxiliary variable sampler for HDP hyperparameters.
- * (Teh et al. 2006 appendix A, Escobar and West 1995 section 6)
+ * <!-- Auxiliary variable sampler for HDP hyperparameters.
+ * (Teh et al. 2006 appendix A, Escobar and West 1995 section 6) -->
  */
 
 template<typename K, typename V>
@@ -2622,6 +3005,24 @@ inline void sample_alpha_each_node(
 		sample_alpha(n.children[i], a + 1, b + 1);
 }
 
+/**
+ * This function implements the auxiliary variable sampler for inferring the
+ * HDP concentration parameters. This function assumes that hdp::alpha is
+ * distributed according to a Gamma distribution with parameters `a[level]` and
+ * `b[level]`.
+ *
+ * This function samples a distinct alpha at every node in the hierarchy. The
+ * function sample_alpha_each_level, on the other hand, samples a distinct
+ * alpha at every *level* in the hierarchy (it assumes that hdp::alpha is the
+ * same across all nodes in the same level).
+ *
+ * \param a an array of shape parameters for the Gamma prior on hdp::alpha,
+ * 		with length hdp::depth, one element for every level in the hierarchy.
+ * \param b an array of rate parameters for the Gamma prior on hdp::alpha, with
+ * 		length hdp::depth, one element for every level in the hierarchy.
+ * \see [Teh et al. 2006 appendix A](https://people.eecs.berkeley.edu/~jordan/papers/hdp.pdf),
+ * 		[Escobar and West 1995 section 6](http://users.wpi.edu/~balnan/Escobar-West-1995.pdf).
+ */
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
 inline void sample_alpha_each_node(
 	hdp_sampler<BaseDistribution, DataDistribution, K, V>& n,
@@ -2647,8 +3048,24 @@ inline void sample_alpha(NodeType& n,
 		sample_alpha(n.children[i], s_sum + 1, log_w_sum + 1);
 }
 
-/* this sampling algorithm for alpha assumes that alpha is
-   the same across all nodes at each level in the HDP */
+/**
+ * This function implements the auxiliary variable sampler for inferring the
+ * HDP concentration parameters. This function assumes that hdp::alpha is
+ * distributed according to a Gamma distribution with parameters `a[level]` and
+ * `b[level]`.
+ *
+ * This function samples a distinct alpha at every *level* in the hierarchy (it
+ * assumes that hdp::alpha is the same across all nodes in the same level). The
+ * function sample_alpha_each_node, on the other hand, does not make this
+ * assumption and samples a distinct hdp::alpha at every node in the hierarchy.
+ *
+ * \param a an array of shape parameters for the Gamma prior on hdp::alpha,
+ * 		with length hdp::depth, one element for every level in the hierarchy.
+ * \param b an array of rate parameters for the Gamma prior on hdp::alpha, with
+ * 		length hdp::depth, one element for every level in the hierarchy.
+ * \see [Teh et al. 2006 appendix A](https://people.eecs.berkeley.edu/~jordan/papers/hdp.pdf),
+ * 		[Escobar and West 1995 section 6](http://users.wpi.edu/~balnan/Escobar-West-1995.pdf).
+ */
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
 inline bool sample_alpha_each_level(
 	hdp_sampler<BaseDistribution, DataDistribution, K, V>& n,
@@ -2678,6 +3095,12 @@ inline bool sample_alpha_each_level(
 	return true;
 }
 
+/**
+ * Returns the joint probability of the concentration parameters hdp::alpha and
+ * node::alpha under the assumption that alpha is distributed according to a
+ * Gamma distribution with parameters `a[level]` and `b[level]`. This function
+ * also assumes that alpha is the same across all nodes in the same level.
+ */
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
 inline V log_probability_each_level(
 	const hdp_sampler<BaseDistribution, DataDistribution, K, V>& n,
@@ -2691,7 +3114,7 @@ inline V log_probability_each_level(
 
 
 /**
- * Logic for computing the probability of a path given an observation.
+ * <!-- Logic for computing the probability of a path given an observation. -->
  */
 
 template<typename K, typename V>
@@ -3044,21 +3467,12 @@ void process_search_state(const NodeType& n,
 	}
 }
 
-template<typename V>
-inline void cleanup_root_probabilities(V** root_probabilities, unsigned int row_count)
-{
-	for (unsigned int i = 0; i < row_count; i++)
-		free(root_probabilities[i]);
-	free(root_probabilities);
-}
-
-inline void cleanup_root_probabilities(array<unsigned int>* root_probabilities, unsigned int row_count)
-{
-	for (unsigned int i = 0; i < row_count; i++)
-		free(root_probabilities[i]);
-	free(root_probabilities);
-}
-
+/**
+ * Returns a copy of the root probabilities from `src`, which this function
+ * assumes were computed from the sampler hierarchy rooted at `h` using the
+ * function `V** compute_root_probabilities(const hdp_sampler<BaseDistribution, DataDistribution, K, V>&, const K&)`
+ * in ::cache.
+ */
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
 V** copy_root_probabilities(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h, const V* const* src)
 {
@@ -3081,6 +3495,12 @@ V** copy_root_probabilities(const hdp_sampler<BaseDistribution, DataDistribution
 	return root_probabilities;
 }
 
+/**
+ * Returns a copy of the root probabilities from `src`, which this function
+ * assumes were computed from the sampler hierarchy rooted at `h` using the
+ * function `V** compute_root_probabilities(const hdp_sampler<BaseDistribution, DataDistribution, K, V>&, const K*, unsigned int)`
+ * in ::cache.
+ */
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
 V** copy_root_probabilities(
 		const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
@@ -3105,6 +3525,12 @@ V** copy_root_probabilities(
 	return root_probabilities;
 }
 
+/**
+ * Returns a copy of the root probabilities from `src`, which this function
+ * assumes were computed from the sampler hierarchy rooted at `h` using the
+ * function `array<unsigned int>* compute_root_probabilities(const hdp_sampler<BaseDistribution, DataDistribution, K, V>&, const K*, unsigned int)`
+ * in the specialization of ::cache.
+ */
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
 array<unsigned int>* copy_root_probabilities(
 		const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
@@ -3174,6 +3600,37 @@ V max_root_probability(
 	return maximum / h.posterior.length;
 }
 
+/**
+ * Computes the posterior predictive probability of `observation` being drawn
+ * from the nodes characterized by the path set. The path set is specified by
+ * the variables `path`, `excluded`, and `excluded_counts`. Whenever an element
+ * of `path` is ::IMPLICIT_NODE, this indicates that any child node at that
+ * level lies within the path set. Exclusions can be specified by the set of
+ * keys `excluded[i]` which is a native array containing a *sorted* list of
+ * keys to be excluded from the path set, at that level. The length of
+ * `excluded[i]` is given by `excluded_counts[i]`.
+ *
+ * This function uses the posterior samples stored in hdp_sampler::posterior
+ * and node_sampler::posterior to perform its computations.
+ *
+ * The results are stored in the array `x` of `FeatureType` objects.
+ *
+ * \tparam FeatureType a "weighted feature set" type that can be initialized
+ * 		with the function `bool init(FeatureType&, unsigned int)` where the
+ * 		unsigned int indicates the length of the feature set, and the following
+ * 		public member functions are defined:
+ * 		`set_feature(unsigned int, unsigned int)`, `set_probability(double)`,
+ * 		`ensure_excluded_capacity(unsigned int, unsigned int)`,
+ * 		`set_excluded(unsigned int, const unsigned int*, unsigned int)`,
+ * 		`exclude_unsorted(unsigned int, unsigned int)`, and
+ * 		`sort_excluded(unsigned int)`. The weighted_feature_set is an example
+ * 		of a type that satisfies this template.
+ * \tparam RootDistributionType the return type of the function
+ * 		`compute_root_probabilities(const hdp_sampler<BaseDistribution, DataDistribution, K, V>&, const K&)`
+ * 		in ::cache. Note that depending on BaseDistribution and
+ * 		DataDistribution, the return type may vary, since a different
+ * 		specialization of ::cache may be used.
+ */
 template<typename BaseDistribution, typename DataDistribution,
 	typename K, typename V, typename FeatureSet, typename RootDistributionType>
 void predict(
@@ -3233,6 +3690,34 @@ void predict(
 		free(queue[i]);
 }
 
+/**
+ * Computes the posterior predictive probability of `observation` being drawn
+ * from the nodes characterized by the path set. The path set is specified by
+ * the variables `path`, `excluded`, and `excluded_counts`. Whenever an element
+ * of `path` is ::IMPLICIT_NODE, this indicates that any child node at that
+ * level lies within the path set.
+ *
+ * This function uses the posterior samples stored in hdp_sampler::posterior
+ * and node_sampler::posterior to perform its computations.
+ *
+ * The results are stored in the array `x` of `FeatureType` objects.
+ *
+ * \tparam FeatureType a "weighted feature set" type that can be initialized
+ * 		with the function `bool init(FeatureType&, unsigned int)` where the
+ * 		unsigned int indicates the length of the feature set, and the following
+ * 		public member functions are defined:
+ * 		`set_feature(unsigned int, unsigned int)`, `set_probability(double)`,
+ * 		`ensure_excluded_capacity(unsigned int, unsigned int)`,
+ * 		`set_excluded(unsigned int, const unsigned int*, unsigned int)`,
+ * 		`exclude_unsorted(unsigned int, unsigned int)`, and
+ * 		`sort_excluded(unsigned int)`. The weighted_feature_set is an example
+ * 		of a type that satisfies this template.
+ * \tparam RootDistributionType the return type of the function
+ * 		`compute_root_probabilities(const hdp_sampler<BaseDistribution, DataDistribution, K, V>&, const K&)`
+ * 		in ::cache. Note that depending on BaseDistribution and
+ * 		DataDistribution, the return type may vary, since a different
+ * 		specialization of ::cache may be used.
+ */
 template<typename BaseDistribution, typename DataDistribution,
 	typename K, typename V, typename FeatureSet, typename RootDistributionType>
 inline void predict(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
@@ -3259,10 +3744,9 @@ inline void predict(const hdp_sampler<BaseDistribution, DataDistribution, K, V>&
 
 
 /**
- * The below functions compute HDP likelihoods over
- * multiple observations, but only with the current
- * sampler state (instead of the set of samples in the
- * 'posterior' array, as the above code does).
+ * <!-- The below functions compute HDP likelihoods over multiple observations,
+ * but only with the current sampler state (instead of the set of samples in
+ * the `posterior` array, as the above code does). -->
  */
 
 template<typename NodeType, typename V>
@@ -3550,6 +4034,44 @@ void process_search_state(
 	}
 }
 
+/**
+ * Computes the posterior predictive probability of each observation in
+ * `observations` being drawn from the nodes characterized by the path set. The
+ * path set is specified by the variables `path`, `excluded`, and
+ * `excluded_counts`. Whenever an element of `path` is ::IMPLICIT_NODE, this
+ * indicates that any child node at that level lies within the path set.
+ * Exclusions can be specified by the set of keys `excluded[i]` which is a
+ * native array containing a *sorted* list of keys to be excluded from the path
+ * set, at that level. The length of `excluded[i]` is given by
+ * `excluded_counts[i]`.
+ *
+ * This function *does not* use the posterior samples stored in
+ * hdp_sampler::posterior and node_sampler::posterior to perform its
+ * computations. Rather, it uses the single point sample currently stored in
+ * the given sampler hierarchy (the state in hdp_sampler and node_sampler
+ * nodes).
+ *
+ * The results are stored in the map `x` from `FeatureType` objects to arrays
+ * of probabilities. Each probability array is parallel to `observations`,
+ * where the probability at index `i` is the posterior predictive probability
+ * of the observation `observations[i]`.
+ *
+ * \tparam FeatureType a "feature set" type that can be initialized with the
+ * 		function `bool init(FeatureType&, unsigned int)` where the unsigned int
+ * 		indicates the length of the feature set, and the following public
+ * 		member functions are defined:
+ * 		`set_feature(unsigned int, unsigned int)`,
+ * 		`ensure_excluded_capacity(unsigned int, unsigned int)`,
+ * 		`set_excluded(unsigned int, const unsigned int*, unsigned int)`,
+ * 		`exclude_unsorted(unsigned int, unsigned int)`, and
+ * 		`sort_excluded(unsigned int)`. The feature_set is an example of a type
+ * 		that satisfies this template.
+ * \tparam RootDistributionType the return type of the function
+ * 		`compute_root_probabilities(const hdp_sampler<BaseDistribution, DataDistribution, K, V>&, const K*, unsigned int)`
+ * 		in ::cache. Note that depending on BaseDistribution and
+ * 		DataDistribution, the return type may vary, since a different
+ * 		specialization of ::cache may be used.
+ */
 template<typename BaseDistribution, typename DataDistribution,
 	typename K, typename V, typename FeatureSet, typename RootDistributionType>
 void predict(
@@ -3610,8 +4132,8 @@ void predict(
 
 
 /**
- * These functions compute HDP likelihoods for a single
- * observation over all samples in the 'posterior' array.
+ * <!-- These functions compute HDP likelihoods for a single observation over
+ * all samples in the 'posterior' array. -->
  */
 
 template<typename NodeType, typename V>
@@ -3710,8 +4232,8 @@ void predict(
 
 
 /**
- * Functionality for computing the joint probability of a
- * seating arrangement in a Chinese restaurant process/franchise.
+ * <!-- Functionality for computing the joint probability of a seating
+ * arrangement in a Chinese restaurant process/franchise. -->
  */
 
 
@@ -3733,6 +4255,10 @@ typename NodeType::value_type crf_log_probability(const NodeType& node) {
 	return score;
 }
 
+/**
+ * Returns the joint log probability of the seating arrangement in the sampler
+ * root node `h` and all descendant nodes in the hierarchy.
+ */
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
 V log_probability(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h) {
 	V score = crf_log_probability(h);
@@ -3743,7 +4269,7 @@ V log_probability(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h
 
 
 /**
- * The following are unit tests for the HDP MCMC code.
+ * <!-- The following are unit tests for the HDP MCMC code. -->
  */
 
 #include <core/timer.h>
