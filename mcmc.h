@@ -151,7 +151,7 @@
 
 namespace detail {
 	template<typename Stream, typename Printer> static auto test_level_printable(int) ->
-			decltype(bool(print(0u, std::declval<Stream&>(), std::declval<Printer&>(), 0u)), std::true_type{});
+			decltype(bool(print(0u, std::declval<Stream&>(), 0u, std::declval<Printer&>())), std::true_type{});
 	template<typename Stream, typename Printer> static auto test_level_printable(long) -> std::false_type;
 }
 
@@ -159,7 +159,7 @@ template<typename Stream, typename Printer> struct is_level_printable : decltype
 
 template<typename Stream, typename Printer,
 	typename std::enable_if<!is_level_printable<Stream, Printer>::value>::type* = nullptr>
-inline bool print(unsigned int u, Stream& stream, Printer& printer, unsigned int level) {
+inline bool print(unsigned int u, Stream& stream, unsigned int level, Printer& printer) {
 	return print(u, stream, printer);
 }
 
@@ -1637,7 +1637,7 @@ bool print(const NodeType& node, Stream& out,
 		if (node.children[i].customer_count == 0) continue;
 		if (first) first = false;
 		else success &= print(' ', out);
-		success &= print('{', out) && print(node.child_key(i), out, key_printer, level) && print(": ", out)
+		success &= print('{', out) && print(node.child_key(i), out, level, key_printer) && print(": ", out)
 				&& print(node.children[i], out, key_printer, atom_printer, level + 1) && print('}', out);
 	}
 	return success;
