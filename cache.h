@@ -1112,17 +1112,16 @@ private:
 
 	inline bool add_to_table_helper(unsigned int atom, unsigned int count, unsigned int table)
 	{
-#if !defined(NDEBUG)
-		bool contains;
-		array_histogram<unsigned int>& histogram = table_counts.get(atom, contains);
+		bool contains; unsigned int index;
+		if (!table_counts.check_size()) return false;
+		array_histogram<unsigned int>& histogram = table_counts.get(atom, contains, index);
 		if (!contains) {
-			fprintf(stderr, "cache WARNING: There are no observations of the given atom.\n");
-			return false;
+			if (!init(histogram, 4)) return false;
+			table_counts.table.keys[index] = atom;
+			table_counts.table.size++;
+			return histogram.add(table, count);
 		}
 		array_map<unsigned int, unsigned int>& map = histogram.counts;
-#else
-		array_map<unsigned int, unsigned int>& map = table_counts.get(atom).counts;
-#endif
 
 		map.values[map.index_of(table)] += count;
 		return true;

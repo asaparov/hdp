@@ -2380,7 +2380,6 @@ inline bool sample_new_assignment(
 
 	sample_result<V> result = sample_table<Collapsed>(n, root_distribution, new_table_probability);
 	cache.on_sample_table(root, root_distribution, root.table_count, observations);
-	cache.on_add(observations);
 	root_distribution.free();
 
 	/* select the new table assignment */
@@ -2505,6 +2504,11 @@ bool add(NodeType n, const BaseDistribution& pi,
 			fix_parent_pointers(n.node.children[i]);
 		}
 	}
+
+#if !defined(NDEBUG)
+	if (*path == IMPLICIT_NODE)
+		fprintf(stderr, "add WARNING: The specified HDP path is ambiguous.\n");
+#endif
 
 	unsigned int index = strict_linear_search(n.node.n->children.keys, *path, 0, (unsigned int) n.node.n->children.size);
 	if (index > 0 && n.node.n->children.keys[index - 1] == *path) {
@@ -4291,6 +4295,7 @@ bool discrete_hdp_test(const BaseParameters& base_params,
 
 	hdp_sampler<BaseDistribution, DataDistribution, K, V> sampler(h);
 	cache<BaseDistribution, DataDistribution, K, V> cache(sampler);
+
 	prepare_sampler(sampler, cache);
 
 	timer stopwatch;
@@ -4333,7 +4338,8 @@ bool discrete_hdp_test(const BaseParameters& base_params,
 				path[j] = IMPLICIT_NODE - 1;
 		for (unsigned int j = 0; j < array_length(samples); j++)
 			sample(sampler, samples[j], path, h.depth - 1, cache);
-		printf(" Samples: "); print(samples, out); fputc('\n', out);
+		printf(" Samples: "); print(samples, out);
+		fputc('\n', out);
 
 		free(paths[i]);
 	}
