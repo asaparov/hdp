@@ -442,13 +442,12 @@ struct node_sampler
 	unsigned int* root_assignments;
 
 	/**
-	 * This array of array_histogram objects keeps track, for each table in
-	 * this node, the set of observations assigned to this table, either
-	 * directly or indirectly via descendant nodes in the hierarchy. This array
-	 * has length node_sampler::table_count and capacity
-	 * node_sampler::table_capacity.
+	 * This array of array_multiset objects keeps track, for each table in this
+	 * node, the set of observations assigned to this table, either directly or
+	 * indirectly via descendant nodes in the hierarchy. This array has length
+	 * node_sampler::table_count and capacity node_sampler::table_capacity.
 	 */
-	array_histogram<K>* descendant_observations;
+	array_multiset<K>* descendant_observations;
 
 	/**
 	 * The number of occupied tables in the Chinese restaurant represented by
@@ -532,11 +531,11 @@ struct node_sampler
 			table_assignments[i] = parent_table_map[table_assignments[i]];
 	}
 
-	bool get_observations(array_histogram<K>& dst, unsigned int assignment) const {
+	bool get_observations(array_multiset<K>& dst, unsigned int assignment) const {
 		for (unsigned int i = 0; i < table_count; i++) {
 			if (table_assignments[i] == assignment && !dst.add(descendant_observations[i])) {
 				fprintf(stderr, "node_sampler.get_observations ERROR: Unable "
-						"to add descendant observations to histogram.\n");
+						"to add descendant observations to multiset.\n");
 				return false;
 			}
 		}
@@ -548,7 +547,7 @@ struct node_sampler
 		table_assignments[dst] = table_assignments[src];
 		table_sizes[dst] = table_sizes[src];
 		root_assignments[dst] = root_assignments[src];
-		array_histogram<K>::move(descendant_observations[src], descendant_observations[dst]);
+		array_multiset<K>::move(descendant_observations[src], descendant_observations[dst]);
 	}
 
 	template<typename Observations, typename Cache>
@@ -707,7 +706,7 @@ struct node_sampler
 
 		for (unsigned int i = 0; i < n.table_count; i++)
 			sum += core::size_of(n.descendant_observations[i], metric);
-		sum += sizeof(array_histogram<K>) * (n.table_capacity - n.table_count);
+		sum += sizeof(array_multiset<K>) * (n.table_capacity - n.table_count);
 
 		sum += 3 * sizeof(unsigned int) * n.table_capacity;
 		return sum;
@@ -822,8 +821,8 @@ private:
 		}
 		root_assignments = new_root_assignments;
 
-		array_histogram<K>* new_descendant_observations = (array_histogram<K>*) realloc(
-				descendant_observations, sizeof(array_histogram<K>) * new_capacity);
+		array_multiset<K>* new_descendant_observations = (array_multiset<K>*) realloc(
+				descendant_observations, sizeof(array_multiset<K>) * new_capacity);
 		if (new_descendant_observations == NULL) {
 			fprintf(stderr, "node_sampler.resize ERROR: Unable to expand descendant_observations.\n");
 			return false;
@@ -885,7 +884,7 @@ bool copy(const node_sampler<K, V>& src, node_sampler<K, V>& dst,
 		return false;
 	}
 	memcpy(dst.observation_assignments, src.observation_assignments, sizeof(unsigned int) * src.observation_count());
-	dst.descendant_observations = (array_histogram<K>*) malloc(sizeof(array_histogram<K>) * src.table_count);
+	dst.descendant_observations = (array_multiset<K>*) malloc(sizeof(array_multiset<K>) * src.table_count);
 	if (dst.descendant_observations == NULL) {
 		free(dst.posterior);
 		free(dst.observation_assignments);
@@ -934,7 +933,7 @@ bool copy(const node_sampler<K, V>& src, node_sampler<K, V>& dst,
 
 template<typename K, typename V>
 struct collapsed_root_sample {
-	array_histogram<K>* descendant_observations;
+	array_multiset<K>* descendant_observations;
 	unsigned int* table_sizes;
 	unsigned int table_count;
 	unsigned int customer_count;
@@ -968,7 +967,7 @@ struct collapsed_root_sample {
 
 private:
 	inline bool initialize(unsigned int table_count, unsigned int observation_count) {
-		descendant_observations = (array_histogram<K>*) malloc(sizeof(array_histogram<K>) * table_count);
+		descendant_observations = (array_multiset<K>*) malloc(sizeof(array_multiset<K>) * table_count);
 		if (descendant_observations == NULL) {
 			fprintf(stderr, "collapsed_root_sample.initialize ERROR: Unable to"
 					" initialize descendant_observations.\n");
@@ -1020,8 +1019,8 @@ bool read(collapsed_root_sample<K, V>& sample, FILE* in, node_sample_scribe<Atom
 {
 	if (!read(sample.table_count, in)) return false;
 
-	sample.descendant_observations = (array_histogram<K>*)
-			malloc(sizeof(array_histogram<K>) * sample.table_count);
+	sample.descendant_observations = (array_multiset<K>*)
+			malloc(sizeof(array_multiset<K>) * sample.table_count);
 	if (sample.descendant_observations == NULL)
 		return false;
 	sample.table_sizes = (unsigned int*) malloc(sizeof(unsigned int) * sample.table_count);
@@ -1154,13 +1153,13 @@ struct hdp_sampler
 	unsigned int* table_sizes;
 
 	/**
-	 * This array of array_histogram objects keeps track, for each table in
+	 * This array of array_multiset objects keeps track, for each table in
 	 * this node, the set of observations assigned to this table, either
 	 * directly or indirectly via descendant nodes in the hierarchy. This array
 	 * has length node_sampler::table_count and capacity
 	 * node_sampler::table_capacity.
 	 */
-	array_histogram<K>* descendant_observations;
+	array_multiset<K>* descendant_observations;
 
 	/**
 	 * The number of occupied tables in the Chinese restaurant represented by
@@ -1244,7 +1243,7 @@ struct hdp_sampler
 	inline void move_table(unsigned int src, unsigned int dst,
 		cache<BaseDistribution, DataDistribution, K, V>& cache)
 	{
-		array_histogram<K>::move(descendant_observations[src], descendant_observations[dst]);
+		array_multiset<K>::move(descendant_observations[src], descendant_observations[dst]);
 		table_sizes[dst] = table_sizes[src];
 		cache.on_move_table(src, dst);
 	}
@@ -1255,7 +1254,7 @@ struct hdp_sampler
 		cache<BaseDistribution, DataDistribution, K, V>& cache)
 	{
 		if (!descendant_observations[dst].add(observations)) {
-			fprintf(stderr, "hdp_sampler.move_to_table ERROR: Unable to initialize new histogram.\n");
+			fprintf(stderr, "hdp_sampler.move_to_table ERROR: Unable to initialize new multiset.\n");
 			return false;
 		}
 		descendant_observations[src].subtract(observations);
@@ -1269,7 +1268,7 @@ struct hdp_sampler
 		cache<BaseDistribution, DataDistribution, K, V>& cache)
 	{
 		if (!descendant_observations[table_count - 1].add(observations)) {
-			fprintf(stderr, "hdp_sampler.move_to_new_table ERROR: Unable to initialize new histogram.\n");
+			fprintf(stderr, "hdp_sampler.move_to_new_table ERROR: Unable to initialize new multiset.\n");
 			return false;
 		}
 		descendant_observations[src].subtract(observations);
@@ -1283,7 +1282,7 @@ struct hdp_sampler
 		cache<BaseDistribution, DataDistribution, K, V>& cache)
 	{
 		if (!descendant_observations[table].add(observations)) {
-			fprintf(stderr, "hdp_sampler.add_to_table ERROR: Unable to initialize new histogram.\n");
+			fprintf(stderr, "hdp_sampler.add_to_table ERROR: Unable to initialize new multiset.\n");
 			return false;
 		}
 		return cache.on_add_to_table(*this, table, observations);
@@ -1294,7 +1293,7 @@ struct hdp_sampler
 		cache<BaseDistribution, DataDistribution, K, V>& cache)
 	{
 		if (!descendant_observations[table_count - 1].add(observations)) {
-			fprintf(stderr, "hdp_sampler.add_to_new_table ERROR: Unable to initialize new histogram.\n");
+			fprintf(stderr, "hdp_sampler.add_to_new_table ERROR: Unable to initialize new multiset.\n");
 			return false;
 		}
 		return cache.on_add_to_new_table(*this, observations);
@@ -1321,7 +1320,7 @@ struct hdp_sampler
 		table_capacity = new_capacity;
 
 		if (!init(descendant_observations[table_count], 8)) {
-			fprintf(stderr, "hdp_sampler.new_table ERROR: Unable to initialize new histogram.\n");
+			fprintf(stderr, "hdp_sampler.new_table ERROR: Unable to initialize new multiset.\n");
 			return false;
 		}
 		table_count++;
@@ -1330,7 +1329,7 @@ struct hdp_sampler
 
 	inline bool new_initial_table() {
 		if (!init(descendant_observations[table_count], 8)) {
-			fprintf(stderr, "hdp_sampler.new_table ERROR: Unable to initialize new histogram.\n");
+			fprintf(stderr, "hdp_sampler.new_table ERROR: Unable to initialize new multiset.\n");
 			return false;
 		}
 		table_sizes[table_count] = 0;
@@ -1365,7 +1364,7 @@ struct hdp_sampler
 
 		sample.table_count = 0;
 		for (unsigned int i = 0; i < table_count; i++) {
-			if (!array_histogram<K>::copy(descendant_observations[i], sample.descendant_observations[i])) {
+			if (!array_multiset<K>::copy(descendant_observations[i], sample.descendant_observations[i])) {
 				fprintf(stderr, "hdp_sampler.add_sample ERROR: Unable to copy descendant observations.\n");
 				core::free(sample);
 				return false;
@@ -1408,7 +1407,7 @@ struct hdp_sampler
 
 		for (unsigned int i = 0; i < h.table_count; i++)
 			sum += core::size_of(h.descendant_observations[i]);
-		sum += (sizeof(DataDistribution) + sizeof(array_histogram<K>)) * (h.table_capacity - h.table_count);
+		sum += (sizeof(DataDistribution) + sizeof(array_multiset<K>)) * (h.table_capacity - h.table_count);
 
 		sum += sizeof(unsigned int) * h.table_capacity; /* for table_sizes */
 		return sum;
@@ -1493,8 +1492,8 @@ private:
 	inline void free() { free(child_count()); }
 
 	inline bool resize(unsigned int new_capacity) {
-		array_histogram<K>* new_descendant_observations = (array_histogram<K>*)
-				realloc(descendant_observations, sizeof(array_histogram<K>) * new_capacity);
+		array_multiset<K>* new_descendant_observations = (array_multiset<K>*)
+				realloc(descendant_observations, sizeof(array_multiset<K>) * new_capacity);
 		if (new_descendant_observations == NULL) {
 			fprintf(stderr, "hdp_sampler.resize ERROR: Unable to expand descendant_observations.\n");
 			return false;
@@ -1574,7 +1573,7 @@ bool copy(
 		return false;
 	}
 	memcpy(dst.observation_assignments, src.observation_assignments, sizeof(unsigned int) * src.observation_count());
-	dst.descendant_observations = (array_histogram<K>*) malloc(sizeof(array_histogram<K>) * src.table_count);
+	dst.descendant_observations = (array_multiset<K>*) malloc(sizeof(array_multiset<K>) * src.table_count);
 	if (dst.descendant_observations == NULL) {
 		free(dst.posterior);
 		free(dst.observation_assignments);
@@ -1620,15 +1619,15 @@ bool print(const NodeType& node, Stream& out,
 {
 	bool success = true;
 	if (node.observation_count() > 0) {
-		array_histogram<K> histogram = array_histogram<K>(node.observation_count());
+		array_multiset<K> multiset = array_multiset<K>(node.observation_count());
 		for (const K& observation : node.n->observations)
-			histogram.add_unsorted(observation);
-		insertion_sort(histogram.counts.keys, histogram.counts.values, (unsigned int) histogram.counts.size, default_sorter());
+			multiset.add_unsorted(observation);
+		insertion_sort(multiset.counts.keys, multiset.counts.values, (unsigned int) multiset.counts.size, default_sorter());
 
-		for (unsigned int i = 0; i < histogram.counts.size; i++) {
+		for (unsigned int i = 0; i < multiset.counts.size; i++) {
 			if (i > 0) success &= print(", ", out);
-			success &= print(histogram.counts.keys[i], out, atom_printer)
-					&& print(':', out) && print(histogram.counts.values[i], out);
+			success &= print(multiset.counts.keys[i], out, atom_printer)
+					&& print(':', out) && print(multiset.counts.values[i], out);
 		}
 	}
 
@@ -1760,7 +1759,7 @@ bool read_sampler_node(NodeType& n, Stream& stream,
 
 	for (unsigned int i = 0; i < table_count; i++) {
 		if (!init(n.descendant_observations[i], 8)) {
-			fprintf(stderr, "read_sampler_node ERROR: Unable to initialize descendant observation histograms.\n");
+			fprintf(stderr, "read_sampler_node ERROR: Unable to initialize descendant observation multisets.\n");
 			n.free(0); free(n.posterior); free(indices); free(inverse_indices); return false;
 		}
 		n.table_count++;
@@ -1969,12 +1968,12 @@ void compute_table_sizes(const NodeType& n, unsigned int* dst, unsigned int dst_
 
 template<typename NodeType>
 bool check_table(const NodeType& n, unsigned int table,
-		const array_histogram<typename NodeType::atom_type>& expected_observations)
+		const array_multiset<typename NodeType::atom_type>& expected_observations)
 {
 	bool success = true;
 
 	auto computed_observations =
-		array_histogram<typename NodeType::atom_type>((unsigned int) expected_observations.counts.size);
+		array_multiset<typename NodeType::atom_type>((unsigned int) expected_observations.counts.size);
 	for (unsigned int i = 0; i < n.child_count(); i++) {
 		if (!n.children[i].get_observations(computed_observations, table)) {
 			fprintf(stderr, "check_table ERROR: Unable to add observations from child node.\n");
@@ -2066,7 +2065,7 @@ bool is_valid(const hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
 	const cache<BaseDistribution, DataDistribution, K, V>& cache)
 {
 	if (!tables_sorted(h)) {
-		fprintf(stderr, "is_valid WARNING: Table array_histograms are not sorted.\n");
+		fprintf(stderr, "is_valid WARNING: Table array_multisets are not sorted.\n");
 		return false;
 	} else if (!check_tables(h)) {
 		fprintf(stderr, "sample_assignment WARNING: The HDP structure is invalid.\n");
@@ -2090,7 +2089,7 @@ void prepare_sampler(node_sampler<K, V>& n, unsigned int root_table_count)
 	free(expected_sizes);
 #endif
 
-	/* sort any histograms */
+	/* sort any multisets */
 	for (unsigned int j = 0; j < n.table_count; j++) {
 		if (n.descendant_observations[j].counts.size <= 1)
 			continue;
@@ -2825,7 +2824,7 @@ void sample_assignment(NodeType& n,
 {
 #if !defined(NDEBUG)
 	if (assignment >= n.node.table_count || n.node.table_sizes[assignment] == 0) {
-		fprintf(stderr, "sample_assignment ERROR: Invalid table assignment histogram.\n");
+		fprintf(stderr, "sample_assignment ERROR: Invalid table assignment multiset.\n");
 		return;
 	}
 #endif
@@ -2876,7 +2875,7 @@ void sample_assignment(NodeType& n,
 #if !defined(NDEBUG)
 	/* for debugging, check the consistency of this data structure */
 	if (!tables_sorted(n.get_root()))
-		fprintf(stderr, "sample_assignment WARNING: Table array_histograms are not sorted.\n");
+		fprintf(stderr, "sample_assignment WARNING: Table array_multisets are not sorted.\n");
 	/*if (!check_tables(n.get_root()))
 		fprintf(stderr, "sample_assignment WARNING: The HDP structure is invalid.\n");
 	if (!cache.is_valid(root))
@@ -3588,7 +3587,7 @@ V max_root_probability(
 
 		/* TODO: test numerical stability */
 		bool contains;
-		array_histogram<unsigned int>& table_counts = caches[i].get_table_counts(observation, contains);
+		array_multiset<unsigned int>& table_counts = caches[i].get_table_counts(observation, contains);
 		if (contains) {
 			for (unsigned int j = 0; j < table_counts.counts.size; j++) {
 				unsigned int table = table_counts.counts.keys[j];

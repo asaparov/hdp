@@ -99,7 +99,7 @@
 #define HDP_H_
 
 #include <core/map.h>
-#include <math/histogram.h>
+#include <math/multiset.h>
 #include <limits.h>
 
 /**

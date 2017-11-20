@@ -28,7 +28,7 @@ constexpr unsigned int count(const K& observation) {
 }
 
 template<typename K>
-inline unsigned int count(const array_histogram<K>& observations) {
+inline unsigned int count(const array_multiset<K>& observations) {
 	return observations.sum;
 }
 
@@ -468,13 +468,13 @@ struct cache<BaseDistribution, dense_categorical<V>, unsigned int, V,
 	/* a map from sizes of observation sets to table_distributions */
 	array_map<unsigned int, table_distribution<V>> distributions;
 
-	/* histogram of table sizes over *all tables* in the CRF */
-	array_histogram<unsigned int> table_histogram;
+	/* multiset of table sizes over *all tables* in the CRF */
+	array_multiset<unsigned int> table_histogram;
 
-	/* a map from sizes of observation sets to histogram where the
-	   keys are root table identifiers and the values are the number
-	   of those observations in the descendants of that table */
-	hash_map<unsigned int, array_histogram<unsigned int>> table_counts;
+	/* a map from sizes of observation sets to multiset where the keys are root
+	   table identifiers and the values are the number of those observations in
+	   the descendants of that table */
+	hash_map<unsigned int, array_multiset<unsigned int>> table_counts;
 
 	rising_factorial_cache<V> factorial_cache;
 
@@ -591,8 +591,8 @@ struct cache<BaseDistribution, dense_categorical<V>, unsigned int, V,
 			return false;
 		}
 
-		array_histogram<unsigned int> actual_table_counts =
-			array_histogram<unsigned int>((unsigned int) table_histogram.counts.size);
+		array_multiset<unsigned int> actual_table_counts =
+			array_multiset<unsigned int>((unsigned int) table_histogram.counts.size);
 		compute_table_histogram(actual_table_counts, h);
 		if (actual_table_counts != table_histogram) {
 			fprintf(stderr, "cache.is_valid ERROR: Table histogram is incorrect.\n");
@@ -607,7 +607,7 @@ struct cache<BaseDistribution, dense_categorical<V>, unsigned int, V,
 	}
 
 	static bool compute_table_histogram(
-		array_histogram<unsigned int>& histogram,
+		array_multiset<unsigned int>& histogram,
 		const node_sampler<unsigned int, V>& n)
 	{
 		for (unsigned int i = 0; i < n.child_count(); i++)
@@ -620,7 +620,7 @@ struct cache<BaseDistribution, dense_categorical<V>, unsigned int, V,
 	}
 
 	static bool compute_table_histogram(
-		array_histogram<unsigned int>& histogram,
+		array_multiset<unsigned int>& histogram,
 		const sampler_root& h)
 	{
 		for (unsigned int i = 0; i < h.child_count(); i++)
@@ -666,7 +666,7 @@ struct cache<BaseDistribution, dense_categorical<V>, unsigned int, V,
 		table_counts.clear();
 
 		for (unsigned int i = 0; i < h.table_count; i++) {
-			const array_histogram<unsigned int>& observations = h.descendant_observations[i];
+			const array_multiset<unsigned int>& observations = h.descendant_observations[i];
 			for (unsigned int j = 0; j < observations.counts.size; j++) {
 				unsigned int atom = observations.counts.keys[j];
 
@@ -674,7 +674,7 @@ struct cache<BaseDistribution, dense_categorical<V>, unsigned int, V,
 				unsigned int bucket;
 				if (!table_counts.check_size())
 					return false;
-				array_histogram<unsigned int>& histogram = table_counts.get(atom, contains, bucket);
+				array_multiset<unsigned int>& histogram = table_counts.get(atom, contains, bucket);
 				if (!contains) {
 					if (!init(histogram, 4)) return false;
 					table_counts.table.keys[bucket] = atom;
@@ -697,7 +697,7 @@ struct cache<BaseDistribution, dense_categorical<V>, unsigned int, V,
 		return true;
 	}
 
-	inline array_histogram<unsigned int>& get_table_counts(unsigned int atom, bool& contains) {
+	inline array_multiset<unsigned int>& get_table_counts(unsigned int atom, bool& contains) {
 		return table_counts.get(atom, contains);
 	}
 
@@ -710,7 +710,7 @@ struct cache<BaseDistribution, dense_categorical<V>, unsigned int, V,
 	}
 
 	inline bool move_to_table(
-			const array_histogram<unsigned int>& observations,
+			const array_multiset<unsigned int>& observations,
 			unsigned int src_table, unsigned int dst_table)
 	{
 		for (unsigned int i = 0; i < observations.counts.size; i++)
@@ -728,7 +728,7 @@ struct cache<BaseDistribution, dense_categorical<V>, unsigned int, V,
 	}
 
 	inline bool move_to_table(
-			const array_histogram<unsigned int>& observations, unsigned int table)
+			const array_multiset<unsigned int>& observations, unsigned int table)
 	{
 		for (unsigned int i = 0; i < observations.counts.size; i++)
 			if (!add_to_table_helper(observations.counts.keys[i],
@@ -745,7 +745,7 @@ struct cache<BaseDistribution, dense_categorical<V>, unsigned int, V,
 	}
 
 	inline bool remove_from_table(
-		const array_histogram<unsigned int>& observations, unsigned int table)
+		const array_multiset<unsigned int>& observations, unsigned int table)
 	{
 		for (unsigned int i = 0; i < observations.counts.size; i++)
 			if (!remove_from_table_helper(observations.counts.keys[i], observations.counts.values[i], table))
@@ -929,7 +929,7 @@ struct cache<BaseDistribution, dense_categorical<V>, unsigned int, V,
 		unsigned int observation, unsigned int count = 1)
 	{
 		bool contains;
-		array_histogram<unsigned int>& table_counts = get_table_counts(observation, contains);
+		array_multiset<unsigned int>& table_counts = get_table_counts(observation, contains);
 		if (!contains) return;
 		for (unsigned int i = 0; i < table_counts.counts.size; i++) {
 			unsigned int table = table_counts.counts.keys[i];
@@ -952,7 +952,7 @@ struct cache<BaseDistribution, dense_categorical<V>, unsigned int, V,
 	inline void compute_likelihoods(const sampler_root& h,
 		table_distribution<V>& root_distribution,
 		unsigned int old_root_assignment,
-		const array_histogram<unsigned int>& observations)
+		const array_multiset<unsigned int>& observations)
 	{
 		for (unsigned int i = 0; i < observations.counts.size; i++)
 			compute_likelihoods(h, root_distribution, old_root_assignment,
@@ -965,7 +965,7 @@ struct cache<BaseDistribution, dense_categorical<V>, unsigned int, V,
 		unsigned int observation, unsigned int count = 1)
 	{
 		bool contains;
-		array_histogram<unsigned int>& table_counts = get_table_counts(observation, contains);
+		array_multiset<unsigned int>& table_counts = get_table_counts(observation, contains);
 		if (!contains) return;
 		for (unsigned int i = 0; i < table_counts.counts.size; i++) {
 			unsigned int table = table_counts.counts.keys[i];
@@ -988,7 +988,7 @@ struct cache<BaseDistribution, dense_categorical<V>, unsigned int, V,
 	inline void on_sample_table(sampler_root& h,
 		root_distribution& root_probabilities,
 		unsigned int old_root_assignment,
-		const array_histogram<unsigned int>& observations)
+		const array_multiset<unsigned int>& observations)
 	{
 		for (unsigned int i = 0; i < observations.counts.size; i++)
 			on_sample_table(h, root_probabilities, old_root_assignment,
@@ -1072,7 +1072,7 @@ private:
 	{
 #if !defined(NDEBUG)
 		bool contains;
-		array_histogram<unsigned int>& histogram = table_counts.get(atom, contains);
+		array_multiset<unsigned int>& histogram = table_counts.get(atom, contains);
 		if (!contains) {
 			fprintf(stderr, "cache WARNING: There are no observations of the given atom.\n");
 			return false;
@@ -1114,7 +1114,7 @@ private:
 	{
 		bool contains; unsigned int index;
 		if (!table_counts.check_size()) return false;
-		array_histogram<unsigned int>& histogram = table_counts.get(atom, contains, index);
+		array_multiset<unsigned int>& histogram = table_counts.get(atom, contains, index);
 		if (!contains) {
 			if (!init(histogram, 4)) return false;
 			table_counts.table.keys[index] = atom;
@@ -1131,7 +1131,7 @@ private:
 	{
 #if !defined(NDEBUG)
 		bool contains;
-		array_histogram<unsigned int>& histogram = table_counts.get(atom, contains);
+		array_multiset<unsigned int>& histogram = table_counts.get(atom, contains);
 		if (!contains) {
 			fprintf(stderr, "cache WARNING: There are no observations of the given atom.\n");
 			return false;
@@ -1195,7 +1195,7 @@ struct cache<BaseDistribution, constant<K>, K, V>
 		return item;
 	}
 
-	const K& first(const array_histogram<K>& items) const {
+	const K& first(const array_multiset<K>& items) const {
 		return items.counts.keys[0];
 	}
 
@@ -1288,7 +1288,7 @@ struct cache<BaseDistribution, constant<K>, K, V>
 	inline void on_sample_table(sampler_root& h,
 		root_distribution& root_probabilities,
 		unsigned int old_root_assignment,
-		const array_histogram<K>& observations) { }
+		const array_multiset<K>& observations) { }
 
 	inline void on_finish_sampling(sampler_root& root,
 		root_distribution& root_probabilities,
