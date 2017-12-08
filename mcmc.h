@@ -3616,10 +3616,10 @@ V max_root_probability(
  * This function uses the posterior samples stored in hdp_sampler::posterior
  * and node_sampler::posterior to perform its computations.
  *
- * The results are stored in the array `x` of `FeatureType` objects.
+ * The results are stored in the array `x` of `FeatureSet` objects.
  *
- * \tparam FeatureType a "weighted feature set" type that can be initialized
- * 		with the function `bool init(FeatureType&, unsigned int)` where the
+ * \tparam FeatureSet a "weighted feature set" type that can be initialized
+ * 		with the function `bool init(FeatureSet&, unsigned int)` where the
  * 		unsigned int indicates the length of the feature set, and the following
  * 		public member functions are defined:
  * 		`set_feature(unsigned int, unsigned int)`, `set_probability(double)`,
@@ -3703,10 +3703,10 @@ void predict(
  * This function uses the posterior samples stored in hdp_sampler::posterior
  * and node_sampler::posterior to perform its computations.
  *
- * The results are stored in the array `x` of `FeatureType` objects.
+ * The results are stored in the array `x` of `FeatureSet` objects.
  *
- * \tparam FeatureType a "weighted feature set" type that can be initialized
- * 		with the function `bool init(FeatureType&, unsigned int)` where the
+ * \tparam FeatureSet a "weighted feature set" type that can be initialized
+ * 		with the function `bool init(FeatureSet&, unsigned int)` where the
  * 		unsigned int indicates the length of the feature set, and the following
  * 		public member functions are defined:
  * 		`set_feature(unsigned int, unsigned int)`, `set_probability(double)`,
@@ -4054,13 +4054,13 @@ void process_search_state(
  * the given sampler hierarchy (the state in hdp_sampler and node_sampler
  * nodes).
  *
- * The results are stored in the map `x` from `FeatureType` objects to arrays
+ * The results are stored in the map `x` from `FeatureSet` objects to arrays
  * of probabilities. Each probability array is parallel to `observations`,
  * where the probability at index `i` is the posterior predictive probability
  * of the observation `observations[i]`.
  *
- * \tparam FeatureType a "feature set" type that can be initialized with the
- * 		function `bool init(FeatureType&, unsigned int)` where the unsigned int
+ * \tparam FeatureSet a "feature set" type that can be initialized with the
+ * 		function `bool init(FeatureSet&, unsigned int)` where the unsigned int
  * 		indicates the length of the feature set, and the following public
  * 		member functions are defined:
  * 		`set_feature(unsigned int, unsigned int)`,
