@@ -1511,7 +1511,7 @@ private:
 	}
 
 	template<typename A, typename B, typename C, typename D>
-	friend bool init(hdp_sampler<A, B, C, D>&, hdp<A, B, C, D>&, int);
+	friend bool init(hdp_sampler<A, B, C, D>&, hdp<A, B, C, D>&, unsigned int);
 
 	template<typename A, typename B, typename C>
 	friend bool read_sampler_node(A&, B&, typename A::node_type&, C&);
@@ -1528,7 +1528,7 @@ private:
  */
 template<typename BaseDistribution, typename DataDistribution, typename K, typename V>
 bool init(hdp_sampler<BaseDistribution, DataDistribution, K, V>& h,
-	hdp<BaseDistribution, DataDistribution, K, V>& root, int initial_table_count = 1)
+	hdp<BaseDistribution, DataDistribution, K, V>& root, unsigned int initial_table_count = 1)
 {
 	h.n = &root;
 	h.table_count = 0;
