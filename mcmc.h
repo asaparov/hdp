@@ -822,7 +822,7 @@ private:
 		root_assignments = new_root_assignments;
 
 		array_multiset<K>* new_descendant_observations = (array_multiset<K>*) realloc(
-				descendant_observations, sizeof(array_multiset<K>) * new_capacity);
+				static_cast<void*>(descendant_observations), sizeof(array_multiset<K>) * new_capacity);
 		if (new_descendant_observations == NULL) {
 			fprintf(stderr, "node_sampler.resize ERROR: Unable to expand descendant_observations.\n");
 			return false;
@@ -1493,7 +1493,7 @@ private:
 
 	inline bool resize(unsigned int new_capacity) {
 		array_multiset<K>* new_descendant_observations = (array_multiset<K>*)
-				realloc(descendant_observations, sizeof(array_multiset<K>) * new_capacity);
+				realloc(static_cast<void*>(descendant_observations), sizeof(array_multiset<K>) * new_capacity);
 		if (new_descendant_observations == NULL) {
 			fprintf(stderr, "hdp_sampler.resize ERROR: Unable to expand descendant_observations.\n");
 			return false;
