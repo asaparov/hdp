@@ -1,6 +1,6 @@
-Documentation and code examples are available at <http://asaparov.org/docs/hdp>. The repository is located at <https://github.com/asaparov/hdp>.
+Documentation and code examples are available at <https://asaparov.org/docs/hdp>. The repository is located at <https://github.com/asaparov/hdp>.
 
-This repository implements data structures to represent Dirichlet processes and hierarchical Dirichlet processes (see <a href="http://asaparov.org/docs/hdp/hdp.h.html">hdp.h</a> for an overview of these concepts). In addition, this repository provides a Markov chain Monte Carlo sampler to perform inference in [mcmc.h](http://asaparov.org/docs/hdp/mcmc.h.html).
+This repository implements data structures to represent Dirichlet processes and hierarchical Dirichlet processes (see <a href="https://asaparov.org/docs/hdp/hdp.h.html">hdp.h</a> for an overview of these concepts). In addition, this repository provides a Markov chain Monte Carlo sampler to perform inference in [mcmc.h](https://asaparov.org/docs/hdp/mcmc.h.html).
 
 ### Dependencies
 
@@ -10,4 +10,4 @@ This library depends on [core](https://github.com/asaparov/core) and [math](http
 
 ### Examples
 
-There is an example in the documentation for [mcmc.h](http://asaparov.org/docs/hdp/mcmc.h.html), as well as a test program in `mcmc.cpp` which can be built using `make hdp_mcmc`.
+There is an example in the documentation for [mcmc.h](https://asaparov.org/docs/hdp/mcmc.h.html), as well as a test program in `mcmc.cpp` which can be built using `make hdp_mcmc`.
