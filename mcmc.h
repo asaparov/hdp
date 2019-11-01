@@ -2505,7 +2505,7 @@ bool add(NodeType n, const BaseDistribution& pi,
 	}
 
 #if !defined(NDEBUG)
-	if (*path == IMPLICIT_NODE)
+	if (*path == IMPLICIT_NODE || *path == UNION_NODE)
 		fprintf(stderr, "add WARNING: The specified HDP path is ambiguous.\n");
 #endif
 
