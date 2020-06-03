@@ -3226,7 +3226,7 @@ inline void complete_path(
 			completed.set_feature(i, label);
 		} else {
 			completed.set_feature(i, path[i]);
-			if (path[i] == IMPLICIT_NODE && excluded != NULL
+			if ((path[i] == IMPLICIT_NODE || path[i] == UNION_NODE)
 			 && !completed.set_excluded(i, excluded[i], excluded_counts[i])) {
 				free(completed);
 				return;
@@ -3846,7 +3846,8 @@ inline void complete_path_distribution(
 			features.set_feature(i, label);
 		} else {
 			features.set_feature(i, path[i]);
-			if (path[i] == IMPLICIT_NODE && !features.set_excluded(i, excluded[i], excluded_counts[i])) {
+			if ((path[i] == IMPLICIT_NODE || path[i] == UNION_NODE)
+			 && !features.set_excluded(i, excluded[i], excluded_counts[i])) {
 				free(features);
 				return;
 			}
