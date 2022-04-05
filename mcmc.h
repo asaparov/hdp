@@ -4595,17 +4595,18 @@ bool hdp_verb_test() {
 			2, 4, 7, 2, 4, 4, 6, 2, 7, 7, 4, 6, 2, 2, 2, 2,
 			7, 2, 4, 4, 2, 4, 8, 4, 2, 7, 2, 4, 7, 2, 2, 9, 9};
 
-	unsigned int** paths = (unsigned int**) alloca(sizeof(unsigned int*) * array_length(x));
-	for (unsigned int i = 0; i < array_length(x); i++) {
+	unsigned int num_examples = (unsigned int) array_length(y);
+	unsigned int** paths = (unsigned int**) alloca(sizeof(unsigned int*) * num_examples);
+	for (unsigned int i = 0; i < num_examples; i++) {
 		paths[i] = (unsigned int*) malloc(sizeof(unsigned int) * (depth - 1));
 		for (unsigned int j = 0; j < depth - 1; j++)
 			paths[i][j] = x[i][j];
 	}
 
 	bool success = discrete_hdp_test<symmetric_dirichlet<V>, dense_categorical<V>>(
-			symmetric_dirichlet<V>(atom_count, pi), alpha, paths, y, (unsigned int) array_length(y), depth);
+			symmetric_dirichlet<V>(atom_count, pi), alpha, paths, y, num_examples, depth);
 
-	for (unsigned int i = 0; i < array_length(x); i++)
+	for (unsigned int i = 0; i < num_examples; i++)
 		free(paths[i]);
 	return success;
 }
